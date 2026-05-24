@@ -1492,6 +1492,26 @@ class TradingLoop:
 
         close_size = position["position_size_r"] * (0.5 if partial else 1.0)
 
+        # ── Paper fidelity: Fee + Funding PnL adjustments ──
+        TAKER_FEE_RATE = 0.00025  # Hyperliquid standard taker fee (0.025%)
+        pos_value = close_size * self.paper_balance
+        entry_fee = pos_value * TAKER_FEE_RATE
+        exit_fee = pos_value * (1 + pnl_pct / 100) * TAKER_FEE_RATE
+        fee_dollars = entry_fee + exit_fee
+
+        symbol = asset_key.split("_")[0]
+        hl_assets = self.hl_context.get("assets", {})
+        funding_rate = hl_assets.get(symbol, {}).get("funding_rate", 0.0)
+        entry_dt = datetime.fromisoformat(position["entry_time"])
+        hours_held = (datetime.now(timezone.utc) - entry_dt).total_seconds() / 3600
+        # Long position: positive funding = shorts pay longs → we receive → positive PnL
+        # Actually: Hyperliquid — positive funding rate means LONGS PAY SHORTS.
+        # So positive funding_rate = cost to longs = negative PnL for our long positions
+        funding_dollars = -funding_rate * hours_held * pos_value
+
+        gross_pnl_dollars = pnl_pct / 100 * pos_value
+        net_pnl_dollars = gross_pnl_dollars - fee_dollars + funding_dollars
+
         trade = {
             "asset": asset_key,
             "entry_price": position["entry_price"],
@@ -1499,6 +1519,11 @@ class TradingLoop:
             "entry_time": position["entry_time"],
             "exit_time": datetime.now(timezone.utc).isoformat(),
             "pnl_pct": round(pnl_pct, 4),
+            "fee_pct": round(fee_dollars / self.paper_balance * 100, 4),
+            "funding_pct": round(funding_dollars / self.paper_balance * 100, 4),
+            "net_pnl_pct": round(net_pnl_dollars / self.paper_balance * 100, 4),
+            "hours_held": round(hours_held, 2),
+            "funding_rate_1h": round(funding_rate, 6),
             "signal": position["signal"],
             "direction": position["direction"],
             "exit_reason": reason,
@@ -1585,16 +1610,17 @@ class TradingLoop:
             if len(self.portfolio_trade_results) > 100:
                 self.portfolio_trade_results = self.portfolio_trade_results[-100:]
 
-        # ── Phase 6: Update portfolio tracker ──
-        # Scale position-level PnL% by allocation fraction to get account-level PnL%
-        account_pnl_pct = pnl_pct * close_size
-        self.portfolio_tracker.update([{"pnl_pct": account_pnl_pct}])
+        # ── Phase 6: Update portfolio tracker & paper balance ──
+        # Use net PnL (gross price PnL - fees + funding accrual)
+        net_account_pnl_pct = net_pnl_dollars / self.paper_balance * 100
+        self.portfolio_tracker.update([{"pnl_pct": net_account_pnl_pct}])
 
-        # ── Track paper balance in dollars ──
-        account_pnl_dollars = pnl_pct / 100 * close_size * self.paper_balance
-        self.paper_balance += account_pnl_dollars
+        # Track paper balance with net PnL
+        self.paper_balance += net_pnl_dollars
         print(
-            f"💰 {asset_key}: Paper balance ${self.paper_balance:.2f} (${account_pnl_dollars:+.2f} on this trade)"
+            f"💰 {asset_key}: Paper balance ${self.paper_balance:.2f} "
+            f"(price=${gross_pnl_dollars:+.2f} fee=${fee_dollars:+.2f} "
+            f"funding=${funding_dollars:+.2f} net=${net_pnl_dollars:+.2f})"
         )
 
     # ── Step 4: ADX Trend Filter ──────────────────────────────────────────

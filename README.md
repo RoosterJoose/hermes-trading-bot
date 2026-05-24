@@ -112,6 +112,22 @@ HERMES_TRADING_MODE=paper uv run python -m hermes_trading
 - `state/<ASSET>/strategy.yaml` — Per-asset strategy parameters
 - `data/bars.db` — 1m OHLC bar store (populated by bar ingester)
 
+## Paper Fidelity
+
+Since Hermes is intentionally paper-first, the paper execution model includes:
+
+| Factor | Status |
+|---|---|
+| **Fees** | ✅ Taker fee 0.025% per leg deducted on entry and exit |
+| **Funding accrual** | ✅ Per-hour funding rate × hours held applied at close |
+| **Slippage** | ❌ Not modeled (fill at mid-price) |
+| **Liquidation risk** | ❌ Not modeled (no leverage) |
+| **Partial fills** | N/A (instant fill in paper) |
+| **Stale data** | ✅ Detected and blocked by stale price gate |
+| **Exit behavior** | ✅ All 4 exit paths execute identically to live |
+
+Each trade record includes `fee_pct`, `funding_pct`, and `net_pnl_pct` for audit tracing.
+
 ## Go-Live Path
 
 The system remains in paper mode until:
