@@ -143,6 +143,10 @@ class TradingLoop:
         self.max_concurrent_total = 3  # max 3-4 total across both sleeves
         self.trend_universe = {"BTC_USDT", "ETH_USDT", "SOL_USDT"}
 
+        # Portfolio-level daily loss hard halt (stops ALL entries)
+        self.portfolio_hard_halt_pct = 4.0  # -4% portfolio daily → global halt
+        self.portfolio_loss_halted = False
+
         # Paper balance tracking (dollar PnL)
         self.initial_balance = initial_balance
         self.paper_balance = initial_balance
@@ -214,11 +218,37 @@ class TradingLoop:
                 # OI Velocity snapshot (once per 60 cycles ≈ hourly)
                 self._update_oi_snapshots()
 
+                # Portfolio-level daily loss hard halt — stops ALL sleeves
+                if (
+                    self.daily_pnl_pct is not None
+                    and self.daily_pnl_pct <= -abs(self.portfolio_hard_halt_pct)
+                ):
+                    if not self.portfolio_loss_halted:
+                        print(
+                            f"⚠️ PORTFOLIO HALT: daily PnL {self.daily_pnl_pct:+.2f}% "
+                            f"<= -{abs(self.portfolio_hard_halt_pct):.1f}% — all entries blocked"
+                        )
+                    self.portfolio_loss_halted = True
+                elif self.daily_pnl_pct is not None and self.daily_pnl_pct > -abs(
+                    self.portfolio_hard_halt_pct
+                ):
+                    # Reset halt when daily PnL recovers above threshold
+                    if self.portfolio_loss_halted:
+                        print(
+                            f"✅ PORTFOLIO HALT RESET: daily PnL {self.daily_pnl_pct:+.2f}% "
+                            f"> -{abs(self.portfolio_hard_halt_pct):.1f}%"
+                        )
+                    self.portfolio_loss_halted = False
+
                 # ── Cycle through each asset ──
                 for asset_cfg in self.assets:
                     key = asset_cfg["key"]
                     strategy = self._load_strategy(key)
                     if not strategy:
+                        continue
+
+                    # Portfolio-level hard halt — skip all asset processing
+                    if self.portfolio_loss_halted:
                         continue
 
                     await self._cycle(
@@ -736,6 +766,8 @@ class TradingLoop:
 
         # Directional Hurst — determine mode from H(t)
         hurst_mode = "mean_reversion"
+        if not hurst.get("active"):
+            hurst_mode = "random_walk"  # unknown regime → smaller MR size
         hurst_signal = None
         h = hurst.get("hurst")
         if h is not None and hurst.get("active"):
@@ -934,6 +966,15 @@ class TradingLoop:
                         vs = self._check_vol_sanity(asset_key)
                         if vs.get("active") and not vs["sane"]:
                             safety_skip_reason = f"vol_sanity: {vs['reason']}"
+
+                    # Cross-sleeve net exposure: don't open MR if trend already has this asset
+                    if not safety_skip_reason:
+                        trend_pos = self.trend_positions.get(asset_key)
+                        if trend_pos is not None:
+                            print(
+                                f"  {asset_key}: 🚫 Cross-sleeve block — trend position open for {asset_key}"
+                            )
+                            safety_skip_reason = "cross_sleeve: trend position open"
 
             if safety_skip_reason:
                 self._log_skipped_setup(
@@ -2048,6 +2089,12 @@ class TradingLoop:
         trend_last = self.trend_cooldown.get(asset_key, 999)
         if trend_last < 60:
             print(f"  {asset_key}: 📊 Trend cooldown {trend_last}/60")
+            return
+
+        # 5. Cross-sleeve net exposure: don't open trend if MR already has this asset
+        mr_pos = self.positions.get(asset_key)
+        if mr_pos is not None:
+            print(f"  {asset_key}: 🚫 Cross-sleeve block — MR position open for {asset_key}")
             return
 
         # ── Entry confirmed ──

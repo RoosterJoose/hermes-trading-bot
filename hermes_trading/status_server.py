@@ -26,7 +26,7 @@ import numpy as np
 
 from aiohttp import web
 
-DEFAULT_PORT = 8099
+DEFAULT_PORT = 8199
 
 
 def _read_json(path: Path) -> Optional[dict]:
@@ -374,7 +374,7 @@ async def run_status_server(
 
     Args:
         state_dir: Path to state directory.
-        port: HTTP port (default 8099).
+        port: HTTP port (default 8199).
         shutdown_event: Optional event to signal graceful shutdown.
     """
     import os

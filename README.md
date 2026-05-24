@@ -138,7 +138,7 @@ The system remains in paper mode until:
 
 ## HTTP Status Server
 
-A lightweight aiohttp server runs alongside the trading loop. **Binds to `127.0.0.1:8099` by default.** Set `HERMES_STATUS_BIND=0.0.0.0` to expose externally.
+A lightweight aiohttp server runs alongside the trading loop. **Binds to `127.0.0.1:8199` by default.** Set `HERMES_STATUS_BIND=0.0.0.0` to expose externally.
 
 | Endpoint | Response |
 |---|---|

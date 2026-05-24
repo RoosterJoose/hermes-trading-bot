@@ -88,7 +88,7 @@ def main():
     async def run_all():
         """Run trading loop + status server together."""
         status_task = asyncio.create_task(
-            run_status_server(STATE_DIR, port=8099)
+            run_status_server(STATE_DIR, port=8199)
         )
         try:
             await TradingLoop(
