@@ -334,7 +334,64 @@ def performance_snapshot() -> dict:
     return result
 
 
-# ── 5. Feature readiness ──
+# ── 5. Reflection Health ──
+
+
+def check_reflection_health() -> dict:
+    """Check if the reflection engine is producing hypotheses consistently."""
+    result = {
+        "total_assets_with_hypotheses": 0,
+        "stale_assets": [],
+        "healthy_assets": [],
+        "latest_hypothesis_overall": None,
+        "status": "✅ Healthy",
+    }
+
+    now = datetime.now(timezone.utc)
+    for asset_dir in sorted(STATE_DIR.iterdir()):
+        if not asset_dir.is_dir():
+            continue
+        hyp_file = asset_dir / "hypotheses.jsonl"
+        if not hyp_file.exists():
+            continue
+        hypotheses = read_jsonl(hyp_file)
+        if not hypotheses:
+            continue
+
+        result["total_assets_with_hypotheses"] += 1
+        latest = hypotheses[-1]
+        latest_ts = latest.get("timestamp", "")
+        try:
+            dt = datetime.fromisoformat(latest_ts)
+            age_hours = (now - dt).total_seconds() / 3600
+            entry = {
+                "asset": asset_dir.name,
+                "total_hypotheses": len(hypotheses),
+                "latest_timestamp": latest_ts[:19],
+                "age_hours": round(age_hours, 1),
+                "latest_action": latest.get("action", "?"),
+            }
+            if age_hours < 3:
+                result["healthy_assets"].append(entry)
+            else:
+                result["stale_assets"].append(entry)
+
+            if result["latest_hypothesis_overall"] is None or latest_ts > result["latest_hypothesis_overall"]:
+                result["latest_hypothesis_overall"] = latest_ts
+        except (ValueError, TypeError):
+            pass
+
+    if result["healthy_assets"]:
+        result["status"] = f"✅ {len(result['healthy_assets'])} asset(s) reflecting"
+    elif result["stale_assets"]:
+        result["status"] = "⚠️ All hypotheses stale — reflection may be stuck"
+    else:
+        result["status"] = "❌ No hypotheses found — reflection never ran"
+
+    return result
+
+
+# ── 6. Feature readiness ──
 
 
 def feature_readiness(trade_progress: dict, setups: dict, perf: dict) -> list[dict]:
@@ -487,7 +544,40 @@ def main():
                   f"DD {bm.get('max_dd','?'):<5}% {d_ok}")
     print()
 
-    # ── 5. Feature readiness ──
+    # ── 5. Reflection health ──
+    reflection = check_reflection_health()
+    print(f"── Reflection Health ──")
+    print(f"  Status: {reflection['status']}")
+    print(f"  Assets with hypotheses: {reflection['total_assets_with_hypotheses']}")
+    for entry in reflection["healthy_assets"]:
+        age_str = ago(entry["latest_timestamp"])
+        print(f"  ✅ {entry['asset']:12s}: v{entry['total_hypotheses']} | {entry['latest_action']} | {age_str}")
+    for entry in reflection["stale_assets"]:
+        print(f"  ⚠️  {entry['asset']:12s}: v{entry['total_hypotheses']} | {entry['latest_action']} | {entry['age_hours']}h ago — STALE")
+
+    # ── 5b. Drawdown Autopsy ──
+    print()
+    print(f"── Drawdown Check ──")
+    import sys, importlib
+    scripts_path = str(Path("/opt/data/hermes-trading/scripts"))
+    if scripts_path not in sys.path:
+        sys.path.insert(0, scripts_path)
+    from drawdown_autopsy import check_triggers, write_autopsy
+    triggers = check_triggers()
+    if triggers["daily_loss_triggered"] or triggers["weekly_dd_triggered"] or triggers["consecutive_losses_triggered"]:
+        print(f"  ⚠️  DRAWDOWN TRIGGERED")
+        if triggers["daily_loss_triggered"]:
+            print(f"     Daily loss: {triggers['daily_pnl_pct']:.2f}% (< -1.5% trigger)")
+        if triggers["weekly_dd_triggered"]:
+            print(f"     Weekly drawdown: {triggers['weekly_dd_pct']:.2f}% (< -4% trigger)")
+        if triggers["consecutive_losses_triggered"]:
+            for a in triggers["triggered_assets"]:
+                print(f"     {a['asset']}: {a['trades_in_streak']} consecutive losses")
+    else:
+        print(f"  ✅ No drawdown triggers (daily: {triggers['daily_pnl_pct']:.2f}%, weekly: {triggers['weekly_dd_pct']:.2f}%)")
+    print()
+
+    # ── 6. Feature readiness ──
     features = feature_readiness(trades, setups, perf)
     print(f"── Feature Readiness ──")
     for f in features:

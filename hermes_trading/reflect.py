@@ -497,6 +497,126 @@ def filter_recent_trades(trades: list, max_age_hours: float = 24) -> list:
     return recent
 
 
+def _load_setups_count(state_dir: Path, asset_key: str) -> int:
+    """Count qualifying setups (skipped due to low confidence) for gatekeeper."""
+    path = state_dir / asset_key / "setups_log.jsonl"
+    if not path.exists():
+        return 0
+    count = 0
+    with open(path) as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                entry = json.loads(line)
+                if entry.get("reason", "").startswith("low_confidence"):
+                    count += 1
+            except json.JSONDecodeError:
+                continue
+    return count
+
+
+def _gatekeeper(asset_key: str, action: str, strategy: dict,
+                completed_trades: int, total_trades: int) -> dict:
+    """Validate a proposed parameter change against conservative criteria.
+
+    Returns {'approved': bool, 'reason': str}.
+    Rules from the document's Parameter Change Gatekeeper prompt:
+      1. 30+ completed trades for asset-level risk changes (stop_loss, position_size)
+      2. 100+ qualifying setups for entry-threshold changes
+      3. Bounded per-cycle adjustment limits
+      4. Reject dangerous widenings of stop loss
+    """
+    # ── Determine change type from action ──
+    change_type = None
+    proposed_value = None
+    current_value = None
+
+    if "tighten_sl" in action or "widen_stop" in action or "stop_loss" in action:
+        change_type = "stop_loss"
+        current_value = strategy.get("stop_loss_pct", 2.0)
+        proposed_value = current_value  # Approximate — will be set by decision tree
+        # The actual value is set in the decision tree above, but actions are
+        # named before the value is computed. We approximate from the action:
+        if "tighten" in action:
+            proposed_value = round(max(0.5, current_value - 0.5 if "regime" in action else 0.2), 2)
+        elif "widen" in action:
+            proposed_value = round(min(5.0, current_value + 0.1), 2)
+
+    elif "entry" in action or "threshold" in action:
+        change_type = "entry_threshold"
+        current_value = strategy.get("entry", {}).get("threshold", 30)
+        if "loosen" in action:
+            proposed_value = min(45, current_value + 2)
+        elif "tighten" in action:
+            proposed_value = max(20, current_value - 1)
+        else:
+            proposed_value = current_value
+
+    elif "btc_gate" in action:
+        change_type = "btc_gate"
+        current_value = strategy.get("btc_gate", {}).get("min_btc_4h_rsi", 25)
+        proposed_value = min(45, current_value + 5)
+
+    # ── Rule 1: Asset-level risk changes need 30+ completed trades ──
+    if change_type == "stop_loss" and completed_trades < 30:
+        return {
+            "approved": False,
+            "reason": f"Need 30+ completed trades for stop-loss changes (have {completed_trades})"
+        }
+
+    # ── Rule 2: Entry-threshold changes need 100+ qualifying setups ──
+    if change_type == "entry_threshold":
+        state_dir = BASE_DIR / "state"
+        setups = _load_setups_count(state_dir, asset_key)
+        if setups < 100:
+            return {
+                "approved": False,
+                "reason": f"Need 100+ qualifying setups for entry-threshold changes (have {setups})"
+            }
+
+    # ── Rule 3: Bounded adjustment limits ──
+    if change_type == "entry_threshold" and proposed_value is not None:
+        delta = proposed_value - current_value
+        if abs(delta) > 3:
+            return {
+                "approved": False,
+                "reason": f"Entry-threshold change of {delta:+d} exceeds ±3 limit per cycle"
+            }
+
+    if change_type == "stop_loss" and proposed_value is not None:
+        reduction = current_value - proposed_value
+        if reduction > 1.0:
+            return {
+                "approved": False,
+                "reason": f"Stop-loss reduction of {reduction:.1f}% exceeds 1% per cycle limit"
+            }
+        if proposed_value > current_value and proposed_value - current_value > 0.5:
+            return {
+                "approved": False,
+                "reason": f"Stop-loss increase of {proposed_value - current_value:.1f}% exceeds 0.5% per cycle limit"
+            }
+
+    # ── Rule 4: Don't widen stop when performance is already bad ──
+    if "widen" in action and completed_trades > 0:
+        # Check recent win rate
+        state_dir = BASE_DIR / "state"
+        trades = load_trades(state_dir, asset_key)
+        recent = filter_recent_trades(trades)
+        if recent:
+            losses = sum(1 for t in recent if t.get("pnl_pct", 0) < 0)
+            total_recent = len(recent)
+            if total_recent >= 5 and losses > total_recent * 0.6:
+                return {
+                    "approved": False,
+                    "reason": f"Widening stop when recent WR is {(total_recent - losses)/total_recent*100:.0f}% would increase risk"
+                }
+
+    # ── All checks passed ──
+    return {"approved": True, "reason": "ok"}
+
+
 def fallback_reflect(state_dir: Path, asset_key: str, goal: dict, trades: list):
     """Deterministic fallback reflection — one variable change, now with market-aware options."""
     strat_path = state_dir / asset_key / "strategy.yaml"
@@ -529,8 +649,9 @@ def fallback_reflect(state_dir: Path, asset_key: str, goal: dict, trades: list):
 
     save_strategy_version(state_dir, asset_key, strategy)
 
-    old_ver = strategy.get("version", "00")
-    new_ver = f"{int(old_ver) + 1:02d}"
+    raw_ver = str(strategy.get("version", "00"))
+    old_ver_num = int(raw_ver.lstrip("vV").lstrip("'").strip())
+    new_ver = f"{old_ver_num + 1:02d}"
 
     overall = score.get("overall_score", 0.0)
     metrics = score.get("metrics", {})
@@ -613,6 +734,27 @@ def fallback_reflect(state_dir: Path, asset_key: str, goal: dict, trades: list):
         hypothesis["reasoning"] = f"Neutral performance. Tightened entry.threshold from {current_threshold} to {strategy['entry']['threshold']}"
 
     strategy["version"] = new_ver
+
+    # ── Parameter Change Gatekeeper ──
+    # Before applying changes, validate against conservative criteria.
+    # Document's rules:
+    #   • 50+ trades for system-level changes
+    #   • 30+ trades for asset-level risk adjustments
+    #   • 100+ qualifying setups for entry-threshold changes
+    #   • Bounded adjustment limits
+    #   • Reject if it increases drawdown without improving expectancy
+    completed_trades = [t for t in trades if t.get("exit_time")]
+    quality = _gatekeeper(asset_key, hypothesis["action"], strategy,
+                         len(completed_trades), len(trades))
+    if not quality["approved"]:
+        print(f"   🚫 GATEKEEPER BLOCKED: {hypothesis['action']} — {quality['reason']}")
+        # Write a rejection hypothesis so we don't keep re-attempting
+        hypothesis["gatekeeper_rejected"] = True
+        hypothesis["rejection_reason"] = quality["reason"]
+        append_hypothesis(state_dir, asset_key, hypothesis)
+        print(f"   Logged hypothesis with rejection — waiting for more data.")
+        return  # Don't update strategy
+
     hypothesis["new_strategy"] = {
         "version": new_ver,
         "entry_threshold": strategy.get("entry", {}).get("threshold"),
@@ -625,7 +767,7 @@ def fallback_reflect(state_dir: Path, asset_key: str, goal: dict, trades: list):
     write_strategy(state_dir, asset_key, strategy)
     append_hypothesis(state_dir, asset_key, hypothesis)
 
-    print(f"   {asset_key}: v{old_ver} → v{new_ver} | {hypothesis['action']} (score: {overall:+.3f})")
+    print(f"   {asset_key}: v{old_ver_num} → v{new_ver} | {hypothesis['action']} (score: {overall:+.3f})")
 
 
 def load_goal(state_dir: Path) -> dict:

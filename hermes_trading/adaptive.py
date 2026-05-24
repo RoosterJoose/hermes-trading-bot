@@ -12,6 +12,7 @@ Features:
   3. CUSUM Regime Detection (Phase 3c) — cumulative sum regime shift monitoring
 """
 
+import math
 import sqlite3
 import numpy as np
 from pathlib import Path
@@ -476,5 +477,133 @@ def compute_cusum_regime(
         result["regime"] = "normal"
         result["block_entry"] = False
         result["reason"] = "normal: no CUSUM breaks detected"
+
+    return result
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Feature 4: Per-Asset Percentile RSI Threshold (spec-based)
+# ──────────────────────────────────────────────────────────────────────
+
+def compute_rsi_percentile_threshold(
+    asset_key: str,
+    min_bars: int = 500,
+) -> dict:
+    """Compute per-asset percentile RSI entry threshold from bars.db.
+
+    Majors (BTC/ETH/SOL) use the 5th percentile (q05).
+    Alts use the 10th percentile (q10).
+
+    This adapts the threshold to each asset's own RSI distribution,
+    avoiding one-size-fits-all fixed thresholds.
+
+    Args:
+        asset_key: e.g. 'BTC_USDT'
+        min_bars: minimum 1m bars required before computing (default: 500)
+
+    Returns dict:
+      active     — bool, whether threshold was computed
+      threshold  — float or None, the RSI entry threshold
+      percentile — int, which percentile was used (5 or 10)
+      bars_used  — int, bars consumed
+      reason     — str, status message
+    """
+    symbol = asset_key.split("_")[0]
+    if symbol in ("BTC", "ETH", "SOL"):
+        percentile = 5
+    else:
+        percentile = 10
+
+    closes, bar_count = _read_1m_closes(asset_key)
+    if not closes:
+        return {"active": False, "threshold": None, "percentile": percentile,
+                "bars_used": 0, "reason": "bar DB empty or not found"}
+
+    if bar_count < min_bars:
+        return {"active": False, "threshold": None, "percentile": percentile,
+                "bars_used": bar_count, "reason": f"need {min_bars} bars, have {bar_count}"}
+
+    if bar_count < 16:
+        return {"active": False, "threshold": None, "percentile": percentile,
+                "bars_used": bar_count, "reason": "need 16+ bars for RSI(14)"}
+
+    rsi_values = _compute_rsi_series(closes, period=14)
+    if len(rsi_values) < 100:
+        return {"active": False, "threshold": None, "percentile": percentile,
+                "bars_used": bar_count, "reason": f"only {len(rsi_values)} RSI values (need 100+)"}
+
+    # Data quality check: if >30% of RSI values are at extremes (≥99 or ≤1),
+    # the underlying bar data is too flat for meaningful percentiles.
+    extreme_ratio = sum(1 for r in rsi_values if r >= 99 or r <= 1) / len(rsi_values)
+    if extreme_ratio > 0.30:
+        return {"active": False, "threshold": None, "percentile": percentile,
+                "bars_used": bar_count,
+                "reason": f"flat data: {extreme_ratio:.0%} RSI at extremes (need ≤30%)"}
+
+    threshold = float(np.percentile(rsi_values, percentile))
+    threshold = max(5.0, min(95.0, threshold))
+
+    return {
+        "active": True,
+        "threshold": round(threshold, 1),
+        "percentile": percentile,
+        "bars_used": bar_count,
+        "reason": f"active ({percentile}th pctile={threshold:.1f}, {bar_count} bars)",
+    }
+
+
+def check_vol_sanity(asset_key: str, n_bars: int = 60) -> dict:
+    """Check if annualized 1m realized volatility exceeds sane limits.
+
+    Reads the last n_bars 1m candles from bars.db, computes log-return
+    volatility, annualizes by sqrt(525600), and blocks if > 3.0.
+    This filters broken/corrupted data feeds without blocking genuine
+    high volatility.
+
+    Args:
+        asset_key: e.g. 'BTC_USDT'
+        n_bars: number of recent 1m bars to check (default: 60 = 1 hour)
+
+    Returns dict:
+      active     — bool, True if vol was computed
+      sane       — bool, True if vol ≤ 3.0 (OK to trade), False if broken
+      vol_ann    — float or None, annualized vol value
+      reason     — str, status message
+    """
+    result = {"active": False, "sane": True, "vol_ann": None, "reason": "insufficient_data"}
+
+    closes, bar_count = _read_1m_closes(asset_key)
+    if not closes or len(closes) < 3:
+        result["reason"] = "bar DB empty or too few bars"
+        return result
+
+    recent = closes[-n_bars:] if len(closes) >= n_bars else closes
+    if len(recent) < 3:
+        result["reason"] = f"only {len(recent)} bars (need 3+)"
+        return result
+
+    log_returns = np.diff(np.log(recent))
+    if len(log_returns) < 2:
+        result["reason"] = "too few log returns"
+        return result
+
+    sigma_1m = float(np.std(log_returns))
+    if sigma_1m <= 0:
+        result["reason"] = "zero vol (flat prices)"
+        result["active"] = True
+        result["sane"] = True
+        result["vol_ann"] = 0.0
+        return result
+
+    # Annualize: 525600 minutes per year (365 * 24 * 60)
+    vol_ann = sigma_1m * math.sqrt(525600)
+    result["active"] = True
+    result["vol_ann"] = round(vol_ann, 4)
+    result["sane"] = vol_ann <= 3.0
+
+    if vol_ann > 3.0:
+        result["reason"] = f"annualized 1m vol {vol_ann:.2f} > 3.0 (broken feed)"
+    else:
+        result["reason"] = f"vol OK ({vol_ann:.2f} annualized)"
 
     return result
