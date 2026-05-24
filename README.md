@@ -136,6 +136,54 @@ The system remains in paper mode until:
 2. 30+ days paper trading with realized Sharpe ≥ 0.8, max DD ≤ 10%
 3. No risk rule violations
 
+## HTTP Status Server
+
+A lightweight aiohttp server runs on `http://0.0.0.0:8099` alongside the trading loop:
+
+| Endpoint | Response |
+|---|---|
+| `GET /` | Service info + endpoint list |
+| `GET /status` | Full heartbeat JSON (balance, positions, context) |
+| `GET /health` | Simple health check with uptime + mode |
+| `GET /positions` | Open positions (MR + trend) |
+| `GET /trades?limit=50` | Recent trades across all assets |
+| `GET /readiness` | Go-live readiness assessment |
+| | `live_ready: true/false` with blocker reasons |
+
+Example readiness response:
+```json
+{
+  "paper_days_elapsed": 18,
+  "required_paper_days": 30,
+  "paper_days_met": false,
+  "total_trades": 45,
+  "min_trade_count": 50,
+  "min_trade_count_met": false,
+  "max_drawdown_pct": 3.2,
+  "max_drawdown_limit": 10.0,
+  "max_drawdown_ok": true,
+  "live_ready": false,
+  "blockers": [
+    "paper_days: 18/30",
+    "trade_count: 45/50"
+  ]
+}
+```
+
+## Configuration
+
+### Strategy schema versioning
+
+Strategy YAML files include a `version` field. On startup, `_validate_strategy()` checks:
+
+- Version is present and numeric
+- All required fields exist
+- Version matches current schema (`v22`)
+
+Missing or outdated versions produce startup warnings but don't block execution.
+
+`load_strategy()` auto-creates a default v01 strategy for new assets.
+
 ## Key Dependencies
 
 - `ccxt` — Exchange connectivity

@@ -146,6 +146,7 @@ class TradingLoop:
         # Paper balance tracking (dollar PnL)
         self.initial_balance = initial_balance
         self.paper_balance = initial_balance
+        self.paper_start_date = datetime.now(timezone.utc).date().isoformat()
 
         # Trust-state scaling (unified risk score)
         self.trust_multiplier: float = 1.0
@@ -2464,6 +2465,56 @@ class TradingLoop:
         else:
             return "range_bound"
 
+    STRATEGY_SCHEMA_VERSION = 22  # Current expected strategy config version
+
+    REQUIRED_STRATEGY_FIELDS = {
+        "entry": {"threshold", "direction"},
+        "stop_loss_pct": set(),
+        "position_size_r": set(),
+        "cooldown_cycles": set(),
+        "btc_gate": {"min_btc_4h_rsi", "min_btc_1h_rsi"},
+        "fng_gate": {"min_value"},
+        "hurst": {"enabled"},
+        "kill_switches": {"enabled", "max_open_positions"},
+        "position_sizing": {"enabled", "base_r"},
+    }
+
+    def _validate_strategy(self, strategy: dict, asset_key: str) -> list:
+        """Validate strategy config against required schema. Returns list of warnings."""
+        warnings = []
+
+        # Version check
+        ver = strategy.get("version")
+        if ver is None:
+            warnings.append(f"{asset_key}: no version field — add version: {self.STRATEGY_SCHEMA_VERSION}")
+        else:
+            try:
+                if int(ver) < self.STRATEGY_SCHEMA_VERSION:
+                    warnings.append(
+                        f"{asset_key}: version v{ver} < current v{self.STRATEGY_SCHEMA_VERSION} "
+                        f"— consider migrating"
+                    )
+            except (ValueError, TypeError):
+                warnings.append(f"{asset_key}: non-numeric version '{ver}'")
+
+        # Required field check
+        for field, subfields in self.REQUIRED_STRATEGY_FIELDS.items():
+            if field not in strategy:
+                warnings.append(f"{asset_key}: missing required field '{field}'")
+                continue
+            if subfields:
+                val = strategy[field]
+                if not isinstance(val, dict):
+                    warnings.append(f"{asset_key}: '{field}' should be a dict")
+                    continue
+                for sf in subfields:
+                    if sf not in val:
+                        warnings.append(
+                            f"{asset_key}: missing required subfield '{field}.{sf}'"
+                        )
+
+        return warnings
+
     def _load_strategy(self, asset_key: str) -> Optional[Dict]:
         """Load strategy from state file."""
         strat_path = self.state_dir / asset_key / "strategy.yaml"
@@ -2527,7 +2578,14 @@ class TradingLoop:
                 yaml.dump(default, f, default_flow_style=False)
             return default
         with open(strat_path) as f:
-            return yaml.safe_load(f)
+            strategy = yaml.safe_load(f)
+        # Run validation
+        if strategy:
+            strategy["_asset"] = asset_key
+            warnings = self._validate_strategy(strategy, asset_key)
+            for w in warnings:
+                print(f"  ⚠️  {w}")
+        return strategy
 
     def _load_mc_dd_threshold(self):
         """Load Monte Carlo 95th percentile max DD from backtest state."""
@@ -2652,6 +2710,7 @@ class TradingLoop:
             "timestamp": now,
             "mode": self.mode,
             "paper_balance": round(self.paper_balance, 2),
+            "paper_start_date": self.paper_start_date,
             "total_pnl_pct": round(
                 (self.paper_balance - self.initial_balance)
                 / self.initial_balance

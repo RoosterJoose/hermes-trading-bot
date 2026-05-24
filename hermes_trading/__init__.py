@@ -71,19 +71,32 @@ def main():
     # Import and run the loop
     sys.path.insert(0, str(BASE_DIR))
     from hermes_trading.loop import TradingLoop
+    from hermes_trading.status_server import run_status_server
 
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    try:
-        loop.run_until_complete(
-            TradingLoop(
+    async def run_all():
+        """Run trading loop + status server together."""
+        status_task = asyncio.create_task(
+            run_status_server(STATE_DIR, port=8099)
+        )
+        try:
+            await TradingLoop(
                 assets,
                 STATE_DIR,
                 BASE_DIR,
                 mode=args.mode,
                 initial_balance=goal.get("initial_balance", 10000.0),
             ).run()
-        )
+        finally:
+            status_task.cancel()
+            try:
+                await status_task
+            except asyncio.CancelledError:
+                pass
+
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        loop.run_until_complete(run_all())
     except KeyboardInterrupt:
         print("\n🛑 Shutdown requested.")
     finally:
