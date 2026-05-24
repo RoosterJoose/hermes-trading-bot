@@ -1,5 +1,6 @@
 #!uv run python
 """Phase watchdog — SILENT while positions open. Triggers alert when closed."""
+
 import json
 from pathlib import Path
 

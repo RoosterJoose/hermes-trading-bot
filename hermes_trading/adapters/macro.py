@@ -22,10 +22,9 @@ class MacroAdapter:
         for attempt in range(1, max_retries + 1):
             try:
                 import httpx
+
                 async with httpx.AsyncClient(timeout=10) as client:
-                    resp = await client.get(
-                        "https://api.alternative.me/fng/?limit=1"
-                    )
+                    resp = await client.get("https://api.alternative.me/fng/?limit=1")
                     if resp.status_code == 200:
                         data = resp.json()
                         raw = data.get("data", [{}])[0]
@@ -45,7 +44,8 @@ class MacroAdapter:
             except Exception as e:
                 if attempt < max_retries:
                     import asyncio
-                    await asyncio.sleep(2 ** attempt)
+
+                    await asyncio.sleep(2**attempt)
 
         self.consecutive_failures += 1
         return {

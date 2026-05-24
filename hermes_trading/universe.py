@@ -13,25 +13,41 @@ from typing import Optional
 HL_INFO_URL = "https://api.hyperliquid.xyz/info"
 
 # Eligibility thresholds (from spec.md Section 2.2)
-MIN_VOLUME_24H = 50_000_000       # $50M
-MIN_OPEN_INTEREST = 10_000_000     # $10M
+MIN_VOLUME_24H = 50_000_000  # $50M
+MIN_OPEN_INTEREST = 10_000_000  # $10M
 MIN_RV_RATIO = 0.8
 MAX_RV_RATIO = 3.0
 MIN_MOVE = 0.75
 
 # Spread thresholds per asset tier (from spec)
 MAX_SPREAD_BPS = {
-    "core": 5,    # BTC, ETH
-    "major": 8,   # SOL, XRP, LINK, AVAX, ADA
-    "beta": 12,   # DOGE and others
+    "core": 5,  # BTC, ETH
+    "major": 8,  # SOL, XRP, LINK, AVAX, ADA
+    "beta": 12,  # DOGE and others
 }
 
 # Asset tier classification
 TIERS = {
     "core": {"BTC", "ETH"},
     "major": {"SOL", "XRP", "LINK", "AVAX", "ADA"},
-    "beta": {"DOGE", "MATIC", "DOT", "ARB", "OP", "ATOM", "APT", "SUI",
-             "NEAR", "HYPE", "PEPE", "AAVE", "UNI", "LDO", "INJ", "TIA"},
+    "beta": {
+        "DOGE",
+        "MATIC",
+        "DOT",
+        "ARB",
+        "OP",
+        "ATOM",
+        "APT",
+        "SUI",
+        "NEAR",
+        "HYPE",
+        "PEPE",
+        "AAVE",
+        "UNI",
+        "LDO",
+        "INJ",
+        "TIA",
+    },
 }
 
 
@@ -83,17 +99,19 @@ def parse_universe(raw_data: list) -> list[dict]:
         oi_usd = oi * mark_px if mark_px > 0 else 0
         change_24h = ((mark_px - prev_px) / prev_px * 100) if prev_px > 0 else 0
 
-        assets.append({
-            "symbol": name,
-            "mark_px": mark_px,
-            "prev_px": prev_px,
-            "funding_rate": funding,
-            "funding_annualized_pct": funding * 365 * 24 * 100,
-            "open_interest_usd": oi_usd,
-            "volume_24h": volume_24h,
-            "change_24h_pct": round(change_24h, 2),
-            "tier": _get_tier(name),
-        })
+        assets.append(
+            {
+                "symbol": name,
+                "mark_px": mark_px,
+                "prev_px": prev_px,
+                "funding_rate": funding,
+                "funding_annualized_pct": funding * 365 * 24 * 100,
+                "open_interest_usd": oi_usd,
+                "volume_24h": volume_24h,
+                "change_24h_pct": round(change_24h, 2),
+                "tier": _get_tier(name),
+            }
+        )
 
     return assets
 
@@ -136,7 +154,9 @@ def screen_and_rank(assets: list[dict], max_results: int = 7) -> list[dict]:
     for a in eligible:
         vol_score = a["volume_24h"] / max_vol if max_vol > 0 else 0
         oi_score = a["open_interest_usd"] / max_oi if max_oi > 0 else 0
-        move_score = abs(a["change_24h_pct"]) / max_abs_change if max_abs_change > 0 else 0
+        move_score = (
+            abs(a["change_24h_pct"]) / max_abs_change if max_abs_change > 0 else 0
+        )
 
         a["watch_score"] = round(
             0.30 * vol_score + 0.20 * oi_score + 0.15 * move_score,
@@ -153,10 +173,12 @@ def format_universe_report(ranked: list[dict]) -> str:
         return "  ⚠ Universe scan: < 3 assets eligible — no-trade state"
 
     lines = [f"  🌌 Universe scan: top {len(ranked)}/{len(ranked)} eligible"]
-    lines.append(f"     {'Symbol':8s} {'Vol($M)':8s} {'OI($M)':8s} {'Fund%APY':9s} {'Chg%':6s} {'Tier':6s} {'Score':6s}")
+    lines.append(
+        f"     {'Symbol':8s} {'Vol($M)':8s} {'OI($M)':8s} {'Fund%APY':9s} {'Chg%':6s} {'Tier':6s} {'Score':6s}"
+    )
     for a in ranked:
         lines.append(
-            f"     {a['symbol']:8s} {a['volume_24h']/1e6:8.1f} {a['open_interest_usd']/1e6:8.1f} "
+            f"     {a['symbol']:8s} {a['volume_24h'] / 1e6:8.1f} {a['open_interest_usd'] / 1e6:8.1f} "
             f"{a['funding_annualized_pct']:>+8.3f}% {a['change_24h_pct']:>+5.1f}% "
             f"{a['tier']:6s} {a['watch_score']:.4f}"
         )

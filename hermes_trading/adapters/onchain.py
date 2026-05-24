@@ -1,4 +1,5 @@
 """On-chain data adapter — optional, returns empty data without API keys."""
+
 import os
 
 
@@ -27,6 +28,7 @@ class OnChainAdapter:
 
         try:
             import httpx
+
             symbol = asset_key.split("_")[0].lower()
             async with httpx.AsyncClient(timeout=15) as client:
                 resp = await client.get(

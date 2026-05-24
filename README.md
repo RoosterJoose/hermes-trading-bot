@@ -36,6 +36,7 @@ hermes_trading/
 | Gate | What It Blocks |
 |---|---|
 | Hurst Regime | MR entries when H > 0.55 (trending) |
+| Percentile RSI | Dynamic per-asset thresholds (q05 majors, q10 alts) from bars.db |
 | Volume Filter | Assets with < $30M 24h volume |
 | OI Velocity | >15% OI expansion in ~48h |
 | BTC Vol Surge | Global MR halt when BTC 1m vol spikes >30% |
@@ -51,7 +52,7 @@ hermes_trading/
 | Correlation Gate | Caps correlated altcoin exposure |
 | Time Exit | Forced close after 45-60 min |
 | Portfolio DD | Global drawdown cap |
-| Vol Sanity | Annualized 1m vol > 3.0 blocks broken data |
+| Vol Sanity | Blocks entries when annualized 1m vol > 3.0 (detects broken data feeds) |
 
 ## Confidence Score (7 Components)
 
@@ -63,7 +64,7 @@ hermes_trading/
 | Candle Position | 0.11 | Price position within candle range |
 | Regime Score | 0.12 | Hurst/CUSUM regime alignment |
 | ADX Score | 0.13 | Low ADX favors mean-reversion |
-| Funding Score | 0.10 | Negative funding = squeeze potential |
+| Funding Score | 0.10 | Negative funding = squeeze potential. Formula: `(fr_1h × 8) / 0.001` (×8 amplification). |
 
 Thresholds: ≥0.60 full entry, 0.55-0.60 half entry, <0.55 none.
 

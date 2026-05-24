@@ -3,12 +3,13 @@
 
 Document's triggers:
   • Daily loss > 1.5%
-  • Weekly drawdown > 4%  
+  • Weekly drawdown > 4%
   • 5 consecutive losses
 
 Runs as part of the daily readiness check. Writes structured autopsy
 reports to state/*/drawdown_autopsy.json for LLM review.
 """
+
 import json
 import os
 from collections import defaultdict
@@ -22,7 +23,11 @@ STATE_DIR = BASE_DIR / "state"
 def load_jsonl(path):
     if not path.exists():
         return []
-    return [json.loads(line) for line in path.read_text().strip().splitlines() if line.strip()]
+    return [
+        json.loads(line)
+        for line in path.read_text().strip().splitlines()
+        if line.strip()
+    ]
 
 
 def check_triggers() -> dict:
@@ -75,11 +80,13 @@ def check_triggers() -> dict:
                 loss_streak = 0
 
         if max_streak >= 5:
-            result["triggered_assets"].append({
-                "asset": asset_dir.name,
-                "reason": f"{max_streak} consecutive losses",
-                "trades_in_streak": max_streak,
-            })
+            result["triggered_assets"].append(
+                {
+                    "asset": asset_dir.name,
+                    "reason": f"{max_streak} consecutive losses",
+                    "trades_in_streak": max_streak,
+                }
+            )
 
         for t in trades:
             exit_time = t.get("exit_time", "")
@@ -132,6 +139,7 @@ def write_autopsy(asset_key: str, trades: list, trigger_info: str):
     sl_pct = 2.0
     if strategy_path.exists():
         import yaml
+
         try:
             with open(strategy_path) as f:
                 s = yaml.safe_load(f) or {}
@@ -143,7 +151,9 @@ def write_autopsy(asset_key: str, trades: list, trigger_info: str):
     for t in recent:
         pnl = t.get("pnl_pct", 0)
         r = round(pnl / sl_pct, 2) if sl_pct else pnl
-        r_multis.append({"r": r, "exit_reason": t.get("exit_reason", "?"), "pnl_pct": pnl})
+        r_multis.append(
+            {"r": r, "exit_reason": t.get("exit_reason", "?"), "pnl_pct": pnl}
+        )
 
     autopsy = {
         "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -153,7 +163,13 @@ def write_autopsy(asset_key: str, trades: list, trigger_info: str):
         "win_rate": round(wins / max(len(pnls), 1) * 100, 1),
         "total_pnl_pct": round(sum(pnls), 2),
         "avg_r": round(sum(r["r"] for r in r_multis) / max(len(r_multis), 1), 2),
-        "exit_reasons": dict((r["exit_reason"], sum(1 for x in r_multis if x["exit_reason"] == r["exit_reason"])) for r in r_multis),
+        "exit_reasons": dict(
+            (
+                r["exit_reason"],
+                sum(1 for x in r_multis if x["exit_reason"] == r["exit_reason"]),
+            )
+            for r in r_multis
+        ),
         "recent_trades": [
             {
                 "entry": t.get("entry_time", "")[:19],
@@ -177,16 +193,24 @@ def write_autopsy(asset_key: str, trades: list, trigger_info: str):
 def run():
     """Main entry point. Checks triggers and writes autopsies if needed."""
     triggers = check_triggers()
-    any_triggered = triggers["daily_loss_triggered"] or triggers["weekly_dd_triggered"] or triggers["consecutive_losses_triggered"]
+    any_triggered = (
+        triggers["daily_loss_triggered"]
+        or triggers["weekly_dd_triggered"]
+        or triggers["consecutive_losses_triggered"]
+    )
 
     if any_triggered:
         print(f"⚠️  DRAWDOWN TRIGGER DETECTED")
         if triggers["daily_loss_triggered"]:
             print(f"   Daily loss: {triggers['daily_pnl_pct']:.2f}% (trigger: < -1.5%)")
         if triggers["weekly_dd_triggered"]:
-            print(f"   Weekly drawdown: {triggers['weekly_dd_pct']:.2f}% (trigger: < -4%)")
+            print(
+                f"   Weekly drawdown: {triggers['weekly_dd_pct']:.2f}% (trigger: < -4%)"
+            )
         if triggers["consecutive_losses_triggered"]:
-            print(f"   Consecutive losses: {triggers['max_consecutive_losses']} (trigger: >= 5)")
+            print(
+                f"   Consecutive losses: {triggers['max_consecutive_losses']} (trigger: >= 5)"
+            )
 
         # Write autopsies
         for asset_dir in sorted(STATE_DIR.iterdir()):
@@ -213,10 +237,14 @@ def run():
                 trigger_info.append(f"loss_streak_{loss_streak}")
 
             if trigger_info:
-                autopsy = write_autopsy(asset_dir.name, completed, "; ".join(trigger_info))
+                autopsy = write_autopsy(
+                    asset_dir.name, completed, "; ".join(trigger_info)
+                )
                 print(f"   📄 Autopsy: {asset_dir.name} ({'; '.join(trigger_info)})")
     else:
-        print(f"   No drawdown triggers — system healthy (daily: {triggers['daily_pnl_pct']:.2f}%, weekly: {triggers['weekly_dd_pct']:.2f}%)")
+        print(
+            f"   No drawdown triggers — system healthy (daily: {triggers['daily_pnl_pct']:.2f}%, weekly: {triggers['weekly_dd_pct']:.2f}%)"
+        )
 
     return int(any_triggered)
 

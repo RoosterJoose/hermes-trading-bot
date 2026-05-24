@@ -10,6 +10,7 @@ class SchemaError(Exception):
     This should halt the trading loop — if an adapter can't produce reliable data,
     the system should not trade on unreliable data.
     """
+
     pass
 
 
@@ -55,14 +56,14 @@ ADAPTER_SCHEMAS = {
 
 def validate_adapter_output(adapter_name: str, output: dict) -> bool:
     """Validate adapter output against its schema.
-    
+
     Args:
         adapter_name: key in ADAPTER_SCHEMAS ('price', 'macro', etc.)
         output: dict returned by the adapter's fetch()
-        
+
     Returns:
         True if valid
-        
+
     Raises:
         SchemaError if any field is missing or has wrong type
     """

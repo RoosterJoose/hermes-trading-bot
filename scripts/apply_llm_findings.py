@@ -6,6 +6,7 @@ recommendations, and writes them as hypotheses + strategy updates.
 
 This simulates what the monthly llm-trading-audit cron will do.
 """
+
 import json
 import shutil
 import sys
@@ -57,11 +58,22 @@ def recommend_for_asset(asset, data):
 
     # Find the key regime
     regimes = p4["regime_performance"]
-    worst_regime = min(regimes.items(), key=lambda x: x[1]["avg_pnl_pct"]) if regimes else (None, None)
+    worst_regime = (
+        min(regimes.items(), key=lambda x: x[1]["avg_pnl_pct"])
+        if regimes
+        else (None, None)
+    )
 
     # Key insight: all R-multiples are near zero
     tiny_r = max_r < 0.3  # max R-multiple under 0.3R means stop never tested
-    weak_wr = sum(1 for b in p3["duration_buckets"].values() if b and b.get("win_rate", 100) < 35) > 0
+    weak_wr = (
+        sum(
+            1
+            for b in p3["duration_buckets"].values()
+            if b and b.get("win_rate", 100) < 35
+        )
+        > 0
+    )
 
     recommendations = []
     changes = {}
@@ -107,20 +119,35 @@ def main():
 
     assets_to_fix = [
         # (asset, new_entry_threshold, new_stop_loss, new_btc_4h_gate, reasoning_summary)
-        ("SOL_USDT", 28, 2.0, 30,
-         "R-multiple analysis: 20 trades all within ±0.25R, avg R=-0.04, 4.8% stop never tested. "
-         "Entry at RSI<34 catches noise-level signals in range_bound regime (25% WR). "
-         "Recommend: tighten entry to RSI<28 (match DOGE's working threshold), "
-         "cut stop to 2.0% (match actual volatility), lower BTC 4h gate to 30 (50 blocked all trades)."),
-        ("XRP_USDT", 26, 2.0, 30,
-         "R-multiple analysis: 18 trades avg R=-0.02, 2.8% stop reasonable but entry at RSI<30 "
-         "too generous for 1m mean-reversion in range_bound regime (22% WR). "
-         "Recommend: tighten entry to RSI<26, lower stop to 2.0% for consistency, "
-         "raise BTC 4h gate to 30 (was 25 — too permissive)."),
-        ("DOGE_USDT", 24, 3.0, 50,
-         "R-multiple analysis: 11 trades, avg R=+0.03, WR=46% in range_bound — best performer. "
-         "Entry threshold at RSI<24 is working (tightest filter). Stop at 6.0% is absurdly wide "
-         "for 1m trades (max R=+0.22). Recommend: reduce stop to 3.0%, keep entry at 24."),
+        (
+            "SOL_USDT",
+            28,
+            2.0,
+            30,
+            "R-multiple analysis: 20 trades all within ±0.25R, avg R=-0.04, 4.8% stop never tested. "
+            "Entry at RSI<34 catches noise-level signals in range_bound regime (25% WR). "
+            "Recommend: tighten entry to RSI<28 (match DOGE's working threshold), "
+            "cut stop to 2.0% (match actual volatility), lower BTC 4h gate to 30 (50 blocked all trades).",
+        ),
+        (
+            "XRP_USDT",
+            26,
+            2.0,
+            30,
+            "R-multiple analysis: 18 trades avg R=-0.02, 2.8% stop reasonable but entry at RSI<30 "
+            "too generous for 1m mean-reversion in range_bound regime (22% WR). "
+            "Recommend: tighten entry to RSI<26, lower stop to 2.0% for consistency, "
+            "raise BTC 4h gate to 30 (was 25 — too permissive).",
+        ),
+        (
+            "DOGE_USDT",
+            24,
+            3.0,
+            50,
+            "R-multiple analysis: 11 trades, avg R=+0.03, WR=46% in range_bound — best performer. "
+            "Entry threshold at RSI<24 is working (tightest filter). Stop at 6.0% is absurdly wide "
+            "for 1m trades (max R=+0.22). Recommend: reduce stop to 3.0%, keep entry at 24.",
+        ),
     ]
 
     for asset, new_entry, new_sl, new_btc_4h, reasoning in assets_to_fix:
@@ -175,7 +202,9 @@ def main():
         append_hypothesis(asset_dir, hypothesis)
 
         print(f"  ✅ {asset:10s}  v{old_ver} → v{new_ver}")
-        print(f"     entry: {old_entry} → {new_entry}  |  stop: {old_sl}% → {new_sl}%  |  BTC 4h gate: {old_gate} → {new_btc_4h}")
+        print(
+            f"     entry: {old_entry} → {new_entry}  |  stop: {old_sl}% → {new_sl}%  |  BTC 4h gate: {old_gate} → {new_btc_4h}"
+        )
         print(f"     {reasoning[:100]}...")
         print()
 
@@ -189,7 +218,9 @@ def main():
             if strat_path.exists():
                 with open(strat_path) as f:
                     s = yaml.safe_load(f) or {}
-                print(f"     {name:10s}  entry={s.get('entry',{}).get('threshold','?')}  stop={s.get('stop_loss_pct','?')}%  v{s.get('version','?')}")
+                print(
+                    f"     {name:10s}  entry={s.get('entry', {}).get('threshold', '?')}  stop={s.get('stop_loss_pct', '?')}%  v{s.get('version', '?')}"
+                )
 
 
 if __name__ == "__main__":

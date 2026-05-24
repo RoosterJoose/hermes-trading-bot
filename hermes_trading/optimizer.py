@@ -35,11 +35,11 @@ PERFORMANCE_DROP_SHARPE = 0.5  # trigger optimizer if rolling Sharpe < this
 
 # Benchmark targets (from You.com ARI May 2026 report)
 BENCHMARKS = {
-    "sharpe_target_mr": 1.2,      # minimum Sharpe for mean-reversion
-    "sharpe_target_trend": 1.6,   # Sharpe for trend-following strategies
-    "max_drawdown_pct": 12.0,     # max allowable drawdown
-    "min_win_rate": 0.40,         # minimum win rate
-    "min_trades_per_asset": 10,   # minimum trades for meaningful analysis
+    "sharpe_target_mr": 1.2,  # minimum Sharpe for mean-reversion
+    "sharpe_target_trend": 1.6,  # Sharpe for trend-following strategies
+    "max_drawdown_pct": 12.0,  # max allowable drawdown
+    "min_win_rate": 0.40,  # minimum win rate
+    "min_trades_per_asset": 10,  # minimum trades for meaningful analysis
 }
 
 
@@ -65,7 +65,7 @@ def _max_drawdown(pnls: List[float]) -> float:
     peak = 1.0
     mdd = 0.0
     for p in pnls:
-        eq *= (1 + p / 100)
+        eq *= 1 + p / 100
         if eq > peak:
             peak = eq
         dd = (peak - eq) / peak * 100
@@ -76,22 +76,28 @@ def _max_drawdown(pnls: List[float]) -> float:
 
 def multi_metric_fitness(trades: List[dict], window_label: str = "") -> dict:
     """Compute multi-metric fitness for a set of trades.
-    
+
     Returns dict with individual metrics and composite score (0-100).
     """
     if not trades:
-        return {"fitness": 0.0, "trades": 0, "sharpe": 0.0,
-                "win_rate": 0.0, "avg_pnl": 0.0, "max_dd": 0.0}
+        return {
+            "fitness": 0.0,
+            "trades": 0,
+            "sharpe": 0.0,
+            "win_rate": 0.0,
+            "avg_pnl": 0.0,
+            "max_dd": 0.0,
+        }
 
     pnls = [t.get("pnl_pct", 0) for t in trades]
     wins = [p for p in pnls if p > 0]
     loss_sum = sum(p for p in pnls if p < 0)
-    
+
     sharpe = _compute_sharpe(pnls)
     win_rate = len(wins) / len(pnls) if pnls else 0
     avg_pnl = sum(pnls) / len(pnls) if pnls else 0
     max_dd = _max_drawdown(pnls)
-    
+
     # Normalize components for composite score
     # Sharpe: target 2.0 for full score (>= 2.0 = 1.0)
     sharpe_norm = min(1.0, sharpe / 2.0)
@@ -101,7 +107,7 @@ def multi_metric_fitness(trades: List[dict], window_label: str = "") -> dict:
     avg_norm = min(1.0, max(-1.0, avg_pnl / 2.0))
     # Max DD: inverse — lower is better. 0% DD = 1.0, 20% DD = 0.0
     dd_norm = max(0.0, 1.0 - max_dd / 20.0)
-    
+
     # Composite: Sharpe has highest weight (most risk-adjusted)
     fitness = sharpe_norm * 0.35 + wr_norm * 0.25 + avg_norm * 0.20 + dd_norm * 0.20
     fitness = max(0.0, min(100.0, fitness * 100))
@@ -119,17 +125,17 @@ def multi_metric_fitness(trades: List[dict], window_label: str = "") -> dict:
 
 def detect_performance_drop(trades: List[dict]) -> Optional[dict]:
     """Check if recent performance warrants optimizer activation.
-    
+
     Returns trigger info dict if conditions met, None otherwise.
     """
     if len(trades) < 30:
         return None
-    
+
     # Use last 24 trades as the recent window
     recent = trades[-24:]
     pnls = [t.get("pnl_pct", 0) for t in recent]
     sharpe = _compute_sharpe(pnls)
-    
+
     if sharpe < PERFORMANCE_DROP_SHARPE:
         return {
             "trigger": "performance_drop",
@@ -142,7 +148,7 @@ def detect_performance_drop(trades: List[dict]) -> Optional[dict]:
 
 def check_benchmarks(trades: List[dict]) -> dict:
     """Check trade performance against benchmark targets.
-    
+
     Returns dict with per-metric pass/fail and recommendation.
     """
     if len(trades) < BENCHMARKS["min_trades_per_asset"]:
@@ -153,7 +159,7 @@ def check_benchmarks(trades: List[dict]) -> dict:
     wins = [p for p in pnls if p > 0]
     win_rate = len(wins) / len(pnls) if pnls else 0
     max_dd = _max_drawdown(pnls)
-    
+
     results = {
         "status": "analyzed",
         "trades": len(trades),
@@ -167,26 +173,32 @@ def check_benchmarks(trades: List[dict]) -> dict:
         "max_dd_target": BENCHMARKS["max_drawdown_pct"],
         "max_dd_met": max_dd <= BENCHMARKS["max_drawdown_pct"],
     }
-    
+
     # Generate recommendations
     recs = []
     if not results["sharpe_met"] and results["sharpe"] < 0.8:
-        recs.append("Sharpe well below MR benchmark (1.2) — consider: "
-                    "tightening stop loss, raising RSI entry threshold to reduce noise")
+        recs.append(
+            "Sharpe well below MR benchmark (1.2) — consider: "
+            "tightening stop loss, raising RSI entry threshold to reduce noise"
+        )
     if not results["win_rate_met"]:
-        recs.append(f"Win rate {results['win_rate']:.0%} below {BENCHMARKS['min_win_rate']:.0%} target — "
-                    "raise RSI threshold to be more selective")
+        recs.append(
+            f"Win rate {results['win_rate']:.0%} below {BENCHMARKS['min_win_rate']:.0%} target — "
+            "raise RSI threshold to be more selective"
+        )
     if not results["max_dd_met"]:
-        recs.append(f"Max drawdown {results['max_drawdown']:.1f}% exceeds {BENCHMARKS['max_drawdown_pct']:.0f}% — "
-                    "tighten stop loss, reduce position sizing")
-    
+        recs.append(
+            f"Max drawdown {results['max_drawdown']:.1f}% exceeds {BENCHMARKS['max_drawdown_pct']:.0f}% — "
+            "tighten stop loss, reduce position sizing"
+        )
+
     results["recommendations"] = recs
     return results
 
 
 def walk_forward_analysis(trades: List[dict], current_config: dict) -> dict:
     """Run walk-forward analysis across chronological windows.
-    
+
     1. Sort trades by time
     2. Split into train (first 70%) and validate (last 30%)
     3. Compute multi-metric fitness on each
@@ -196,24 +208,27 @@ def walk_forward_analysis(trades: List[dict], current_config: dict) -> dict:
     # Sort chronological
     sorted_trades = sorted(trades, key=lambda t: t.get("entry_time", ""))
     total = len(sorted_trades)
-    
+
     if total < 20:
-        return {"status": "insufficient_data", "trades": total,
-                "message": f"Need at least 20 trades for walk-forward (have {total})"}
-    
+        return {
+            "status": "insufficient_data",
+            "trades": total,
+            "message": f"Need at least 20 trades for walk-forward (have {total})",
+        }
+
     split_idx = int(total * 0.70)
     train = sorted_trades[:split_idx]
     validate = sorted_trades[split_idx:]
-    
+
     train_fit = multi_metric_fitness(train, window_label="train")
     val_fit = multi_metric_fitness(validate, window_label="validate")
     overall = multi_metric_fitness(sorted_trades, window_label="overall")
-    
+
     # Detect degradation
     degradation = train_fit["fitness"] - val_fit["fitness"] > 15
     overfitting = degradation and train_fit["sharpe"] > 1.5 and val_fit["sharpe"] < 0.5
     regime_shift = degradation and val_fit["sharpe"] < 0.5 and train_fit["sharpe"] > 1.0
-    
+
     recommendations = []
     if overfitting:
         recommendations.append(
@@ -234,7 +249,7 @@ def walk_forward_analysis(trades: List[dict], current_config: dict) -> dict:
         recommendations.append(
             "Recent win rate below 30% — raise RSI entry threshold to increase selectivity."
         )
-    
+
     return {
         "status": "analyzed",
         "trades": total,
@@ -249,26 +264,31 @@ def walk_forward_analysis(trades: List[dict], current_config: dict) -> dict:
     }
 
 
-def needs_optimization(asset_key: str, trades: List[dict],
-                       last_optimization: Optional[dict] = None) -> dict:
+def needs_optimization(
+    asset_key: str, trades: List[dict], last_optimization: Optional[dict] = None
+) -> dict:
     """Check if optimizer should activate based on trigger conditions.
-    
+
     Returns trigger info dict with reason + urgency.
     """
     reasons = []
     urgency = "low"
-    
+
     # Trigger 1: Trade count threshold
     if len(trades) >= MIN_TRADES_FOR_OPTIMIZATION:
-        reasons.append(f"trade_threshold ({len(trades)} >= {MIN_TRADES_FOR_OPTIMIZATION})")
+        reasons.append(
+            f"trade_threshold ({len(trades)} >= {MIN_TRADES_FOR_OPTIMIZATION})"
+        )
         urgency = "medium"
-    
+
     # Trigger 2: Performance drop
     drop = detect_performance_drop(trades)
     if drop:
-        reasons.append(f"performance_drop (Sharpe={drop['recent_sharpe']:.2f} < {PERFORMANCE_DROP_SHARPE})")
+        reasons.append(
+            f"performance_drop (Sharpe={drop['recent_sharpe']:.2f} < {PERFORMANCE_DROP_SHARPE})"
+        )
         urgency = "high" if drop["recent_sharpe"] < 0.3 else "medium"
-    
+
     # Trigger 3: Scheduled (30 days since last run)
     if last_optimization:
         last_ts = last_optimization.get("timestamp", "")
@@ -280,7 +300,7 @@ def needs_optimization(asset_key: str, trades: List[dict],
                 urgency = "low"
         except Exception:
             pass
-    
+
     return {
         "asset": asset_key,
         "triggered": len(reasons) > 0,
@@ -291,21 +311,28 @@ def needs_optimization(asset_key: str, trades: List[dict],
     }
 
 
-def check_and_optimize(asset_key: str, trades: List[dict],
-                       current_config: dict,
-                       optimization_log: Optional[list] = None) -> dict:
+def check_and_optimize(
+    asset_key: str,
+    trades: List[dict],
+    current_config: dict,
+    optimization_log: Optional[list] = None,
+) -> dict:
     """Full optimizer check: triggers → analysis → recommendations.
-    
+
     This is called by _check_optimizer_ready() in loop.py.
     """
     # Get last optimization record
     last_opt = None
     if optimization_log:
-        last_opt = optimization_log[-1] if isinstance(optimization_log, list) else optimization_log
-    
+        last_opt = (
+            optimization_log[-1]
+            if isinstance(optimization_log, list)
+            else optimization_log
+        )
+
     # Check triggers
     trigger = needs_optimization(asset_key, trades, last_opt)
-    
+
     result = {
         "asset": asset_key,
         "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -313,7 +340,7 @@ def check_and_optimize(asset_key: str, trades: List[dict],
         "trades_available": len(trades),
         "threshold": MIN_TRADES_FOR_OPTIMIZATION,
     }
-    
+
     if not trigger["triggered"]:
         result["status"] = "dormant"
         result["message"] = (
@@ -322,21 +349,21 @@ def check_and_optimize(asset_key: str, trades: List[dict],
             f"Next scheduled: last run + {OPTIMIZER_COOLDOWN_DAYS}d"
         )
         return result
-    
+
     # Run benchmarks
     benchmarks = check_benchmarks(trades)
     result["benchmarks"] = benchmarks
-    
+
     # Run walk-forward analysis
     wf = walk_forward_analysis(trades, current_config)
     result["walk_forward"] = wf
     result["status"] = "analyzed"
     result["message"] = (
         f"Optimizer ran. "
-        f"Fitness: train={wf.get('train_fitness',{}).get('fitness','?')} "
-        f"validate={wf.get('validate_fitness',{}).get('fitness','?')}. "
+        f"Fitness: train={wf.get('train_fitness', {}).get('fitness', '?')} "
+        f"validate={wf.get('validate_fitness', {}).get('fitness', '?')}. "
         f"Trigger: {trigger['reasons'][0] if trigger['reasons'] else 'unknown'}. "
         f"Recs: {len(wf.get('recommendations', []))}"
     )
-    
+
     return result

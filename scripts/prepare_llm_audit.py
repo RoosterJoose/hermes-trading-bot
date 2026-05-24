@@ -10,6 +10,7 @@ Usage:
 
 Output: state/*/llm_audit_data.json  +  state/portfolio_audit.json
 """
+
 import json
 import os
 import sys
@@ -24,7 +25,11 @@ STATE_DIR = BASE_DIR / "state"
 def load_jsonl(path):
     if not path.exists():
         return []
-    return [json.loads(line) for line in path.read_text().strip().splitlines() if line.strip()]
+    return [
+        json.loads(line)
+        for line in path.read_text().strip().splitlines()
+        if line.strip()
+    ]
 
 
 def compute_r_multiple(trade, strategy):
@@ -51,6 +56,7 @@ def prepare_asset_audit(asset_key):
     strategy = {}
     if strategy_path.exists():
         import yaml
+
         strategy = yaml.safe_load(strategy_path.read_text()) or {}
 
     completed = [t for t in trades if t.get("exit_time") and t.get("entry_time")]
@@ -60,18 +66,32 @@ def prepare_asset_audit(asset_key):
 
     # Bucket
     r_buckets = {
-        "<-3R": 0, "-3R to -2R": 0, "-2R to -1R": 0, "-1R to 0": 0,
-        "0 to 1R": 0, "1R to 2R": 0, "2R to 3R": 0, ">3R": 0,
+        "<-3R": 0,
+        "-3R to -2R": 0,
+        "-2R to -1R": 0,
+        "-1R to 0": 0,
+        "0 to 1R": 0,
+        "1R to 2R": 0,
+        "2R to 3R": 0,
+        ">3R": 0,
     }
     for r in r_multis:
-        if r < -3: r_buckets["<-3R"] += 1
-        elif r < -2: r_buckets["-3R to -2R"] += 1
-        elif r < -1: r_buckets["-2R to -1R"] += 1
-        elif r < 0: r_buckets["-1R to 0"] += 1
-        elif r < 1: r_buckets["0 to 1R"] += 1
-        elif r < 2: r_buckets["1R to 2R"] += 1
-        elif r < 3: r_buckets["2R to 3R"] += 1
-        else: r_buckets[">3R"] += 1
+        if r < -3:
+            r_buckets["<-3R"] += 1
+        elif r < -2:
+            r_buckets["-3R to -2R"] += 1
+        elif r < -1:
+            r_buckets["-2R to -1R"] += 1
+        elif r < 0:
+            r_buckets["-1R to 0"] += 1
+        elif r < 1:
+            r_buckets["0 to 1R"] += 1
+        elif r < 2:
+            r_buckets["1R to 2R"] += 1
+        elif r < 3:
+            r_buckets["2R to 3R"] += 1
+        else:
+            r_buckets[">3R"] += 1
 
     # ── Time-in-Trade vs Outcome ──
     durations = []
@@ -81,7 +101,13 @@ def prepare_asset_audit(asset_key):
             exit_t = datetime.fromisoformat(t["exit_time"])
             mins = (exit_t - entry).total_seconds() / 60
             r = compute_r_multiple(t, strategy)
-            durations.append({"duration_mins": round(mins, 1), "r_multiple": r, "pnl_pct": t.get("pnl_pct", 0)})
+            durations.append(
+                {
+                    "duration_mins": round(mins, 1),
+                    "r_multiple": r,
+                    "pnl_pct": t.get("pnl_pct", 0),
+                }
+            )
         except (ValueError, KeyError):
             pass
 
@@ -89,11 +115,16 @@ def prepare_asset_audit(asset_key):
     dur_buckets = {"0-5m": [], "5-15m": [], "15-30m": [], "30-60m": [], "60m+": []}
     for d in durations:
         mins = d["duration_mins"]
-        if mins <= 5: dur_buckets["0-5m"].append(d)
-        elif mins <= 15: dur_buckets["5-15m"].append(d)
-        elif mins <= 30: dur_buckets["15-30m"].append(d)
-        elif mins <= 60: dur_buckets["30-60m"].append(d)
-        else: dur_buckets["60m+"].append(d)
+        if mins <= 5:
+            dur_buckets["0-5m"].append(d)
+        elif mins <= 15:
+            dur_buckets["5-15m"].append(d)
+        elif mins <= 30:
+            dur_buckets["15-30m"].append(d)
+        elif mins <= 60:
+            dur_buckets["30-60m"].append(d)
+        else:
+            dur_buckets["60m+"].append(d)
 
     dur_analysis = {}
     for bucket, items in dur_buckets.items():
@@ -113,11 +144,13 @@ def prepare_asset_audit(asset_key):
     regime_outcomes = defaultdict(list)
     for t in recent:
         regime = t.get("regime") or t.get("market_regime_entry") or "unknown"
-        regime_outcomes[regime].append({
-            "pnl_pct": t.get("pnl_pct", 0),
-            "direction": t.get("direction", "long"),
-            "exit_reason": t.get("exit_reason", "?"),
-        })
+        regime_outcomes[regime].append(
+            {
+                "pnl_pct": t.get("pnl_pct", 0),
+                "direction": t.get("direction", "long"),
+                "exit_reason": t.get("exit_reason", "?"),
+            }
+        )
 
     regime_analysis = {}
     for regime, outcomes in sorted(regime_outcomes.items()):
@@ -148,7 +181,9 @@ def prepare_asset_audit(asset_key):
         score = s.get("confidence_score")
         if reason.startswith("low_confidence"):
             skips_by_reason["low_confidence"].append({"score": score, "reason": reason})
-        elif reason.startswith(("cooldown", "kill_switch", "mc_dd", "portfolio_dd", "correlation")):
+        elif reason.startswith(
+            ("cooldown", "kill_switch", "mc_dd", "portfolio_dd", "correlation")
+        ):
             base = reason.split(":")[0]
             skips_by_reason[base].append({"score": score, "reason": reason})
         else:
@@ -186,11 +221,15 @@ def prepare_asset_audit(asset_key):
         # Gate: BTC 4h RSI
         btc_4h = t.get("btc_entry_4h_rsi")
         if btc_4h is not None and btc_4h < intended_policy["btc_4h_min_rsi"]:
-            violations.append(f"btc_4h_rsi={btc_4h:.0f} < gate={intended_policy['btc_4h_min_rsi']}")
+            violations.append(
+                f"btc_4h_rsi={btc_4h:.0f} < gate={intended_policy['btc_4h_min_rsi']}"
+            )
         # Gate: BTC 1h RSI
         btc_1h = t.get("btc_entry_1h_rsi")
         if btc_1h is not None and btc_1h < intended_policy["btc_1h_min_rsi"]:
-            violations.append(f"btc_1h_rsi={btc_1h:.0f} < gate={intended_policy['btc_1h_min_rsi']}")
+            violations.append(
+                f"btc_1h_rsi={btc_1h:.0f} < gate={intended_policy['btc_1h_min_rsi']}"
+            )
         # Gate: Fear & Greed
         fng = t.get("fear_greed_entry")
         if fng is not None and fng < intended_policy["fng_min_value"]:
@@ -198,22 +237,34 @@ def prepare_asset_audit(asset_key):
         # Track actual position sizes for LLM context (NOT a violation check — size is dynamic)
         pos_size = t.get("position_size_r", 0)
         signal = t.get("signal", "?")
-        position_sizes.append({"entry_time": t.get("entry_time", "")[:19], "size": pos_size, "signal": signal})
-        discipline_checks.append({
-            "entry_time": t.get("entry_time", "")[:19],
-            "exit_reason": t.get("exit_reason", "?"),
-            "pnl_pct": t.get("pnl_pct", 0),
-            "signal": signal,
-            "violations": violations,
-        })
+        position_sizes.append(
+            {
+                "entry_time": t.get("entry_time", "")[:19],
+                "size": pos_size,
+                "signal": signal,
+            }
+        )
+        discipline_checks.append(
+            {
+                "entry_time": t.get("entry_time", "")[:19],
+                "exit_reason": t.get("exit_reason", "?"),
+                "pnl_pct": t.get("pnl_pct", 0),
+                "signal": signal,
+                "violations": violations,
+            }
+        )
 
     return {
         "asset": asset_key,
         "total_trades": len(trades),
         "completed_trades": len(completed),
         "period": {
-            "first_trade": completed[0].get("entry_time", "")[:19] if completed else "N/A",
-            "last_trade": completed[-1].get("exit_time", "")[:19] if completed else "N/A",
+            "first_trade": completed[0].get("entry_time", "")[:19]
+            if completed
+            else "N/A",
+            "last_trade": completed[-1].get("exit_time", "")[:19]
+            if completed
+            else "N/A",
         },
         "prompt_1_discipline": {
             "intended_policy": intended_policy,
@@ -232,13 +283,23 @@ def prepare_asset_audit(asset_key):
             "avg_r": round(sum(r_multis) / len(r_multis), 2) if r_multis else 0,
             "max_r": round(max(r_multis), 2) if r_multis else 0,
             "min_r": round(min(r_multis), 2) if r_multis else 0,
-            "histogram_shape": "right-skewed" if sum(r_buckets.get(b, 0) for b in ["<-3R","-3R to -2R","-2R to -1R"]) > sum(r_buckets.get(b, 0) for b in ["1R to 2R","2R to 3R",">3R"]) else "left-skewed" if sum(r_buckets.get(b, 0) for b in [">3R","2R to 3R","1R to 2R"]) > sum(r_buckets.get(b, 0) for b in ["<-3R","-3R to -2R","-2R to -1R"]) else "symmetric",
+            "histogram_shape": "right-skewed"
+            if sum(r_buckets.get(b, 0) for b in ["<-3R", "-3R to -2R", "-2R to -1R"])
+            > sum(r_buckets.get(b, 0) for b in ["1R to 2R", "2R to 3R", ">3R"])
+            else "left-skewed"
+            if sum(r_buckets.get(b, 0) for b in [">3R", "2R to 3R", "1R to 2R"])
+            > sum(r_buckets.get(b, 0) for b in ["<-3R", "-3R to -2R", "-2R to -1R"])
+            else "symmetric",
         },
         "prompt_3_duration": {
             "durations_analyzed": len(durations),
             "duration_buckets": dur_analysis,
-            "longest_trade_mins": max(d["duration_mins"] for d in durations) if durations else 0,
-            "shortest_trade_mins": min(d["duration_mins"] for d in durations) if durations else 0,
+            "longest_trade_mins": max(d["duration_mins"] for d in durations)
+            if durations
+            else 0,
+            "shortest_trade_mins": min(d["duration_mins"] for d in durations)
+            if durations
+            else 0,
         },
         "prompt_4_regime": {
             "win_loss_sequence": win_loss_seq[-20:],  # last 20 for readability
@@ -264,10 +325,13 @@ def main():
     ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
     print(f"[{ts}] 📊 Preparing LLM audit data")
 
-    assets = sorted([
-        d.name for d in STATE_DIR.iterdir()
-        if d.is_dir() and (d / "trades.jsonl").exists()
-    ])
+    assets = sorted(
+        [
+            d.name
+            for d in STATE_DIR.iterdir()
+            if d.is_dir() and (d / "trades.jsonl").exists()
+        ]
+    )
 
     portfolio = []
     for asset in assets:
@@ -275,7 +339,9 @@ def main():
             data = prepare_asset_audit(asset)
             out_path = STATE_DIR / asset / "llm_audit_data.json"
             out_path.write_text(json.dumps(data, indent=2, default=str))
-            print(f"  ✅ {asset:12s}  {data['completed_trades']:3d} trades → {out_path.name}")
+            print(
+                f"  ✅ {asset:12s}  {data['completed_trades']:3d} trades → {out_path.name}"
+            )
             portfolio.append(data)
         except Exception as e:
             print(f"  ❌ {asset:12s}  ERROR: {e}")
@@ -300,7 +366,9 @@ def main():
     }
     portfolio_path.write_text(json.dumps(portfolio_data, indent=2, default=str))
     print(f"\n  ✅ Portfolio summary → {portfolio_path.name}")
-    print(f"  Total assets: {len(assets)} | Total completed trades: {portfolio_data['total_trades_across_portfolio']}")
+    print(
+        f"  Total assets: {len(assets)} | Total completed trades: {portfolio_data['total_trades_across_portfolio']}"
+    )
 
 
 if __name__ == "__main__":

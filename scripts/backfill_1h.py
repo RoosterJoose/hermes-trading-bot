@@ -53,10 +53,12 @@ async def main():
     log("📊 1h Bar Backfill starting")
     conn = init_db()
 
-    exchange = ccxt.kraken({
-        "enableRateLimit": True,
-        "options": {"defaultType": "spot"},
-    })
+    exchange = ccxt.kraken(
+        {
+            "enableRateLimit": True,
+            "options": {"defaultType": "spot"},
+        }
+    )
 
     try:
         for symbol in ASSETS:
@@ -64,7 +66,9 @@ async def main():
             log(f"\nFetching {symbol} 1h bars...")
 
             # Start from 35 days ago (buffer beyond 30d Kraken cap)
-            since = int((datetime.now(timezone.utc) - timedelta(days=35)).timestamp() * 1000)
+            since = int(
+                (datetime.now(timezone.utc) - timedelta(days=35)).timestamp() * 1000
+            )
             total_inserted = 0
             pages = 0
 
@@ -106,7 +110,8 @@ async def main():
 
             # Show date range
             row = conn.execute(
-                "SELECT MIN(timestamp), MAX(timestamp) FROM bars_1h WHERE asset = ?", (asset,)
+                "SELECT MIN(timestamp), MAX(timestamp) FROM bars_1h WHERE asset = ?",
+                (asset,),
             ).fetchone()
             if row and row[0]:
                 min_dt = datetime.fromtimestamp(row[0]).strftime("%Y-%m-%d %H:%M")

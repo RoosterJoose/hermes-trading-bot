@@ -6,6 +6,7 @@ in a local SQLite database for RSI percentile / Hurst / CUSUM computation.
 
 Idempotent: skips bars already stored. Runs until Ctrl+C.
 """
+
 import asyncio
 import json
 import sqlite3
@@ -16,8 +17,18 @@ from pathlib import Path
 import ccxt.async_support as ccxt
 
 # ── Config ──────────────────────────────────────────────────────────────────
-ASSETS = ["ADA/USDT", "AVAX/USDT", "BNB/USDT", "BTC/USDT", "DOGE/USDT",
-         "DOT/USDT", "ETH/USDT", "LINK/USDT", "SOL/USDT", "XRP/USDT"]
+ASSETS = [
+    "ADA/USDT",
+    "AVAX/USDT",
+    "BNB/USDT",
+    "BTC/USDT",
+    "DOGE/USDT",
+    "DOT/USDT",
+    "ETH/USDT",
+    "LINK/USDT",
+    "SOL/USDT",
+    "XRP/USDT",
+]
 TIMEFRAME = "1m"
 LIMIT = 100  # fetch last 100 one-minute bars each cycle
 CYCLE_SECONDS = 60
@@ -89,8 +100,12 @@ def get_stats(conn) -> dict:
     ).fetchall()
     stats = {}
     for asset, count, min_ts, max_ts in rows:
-        min_dt = datetime.fromtimestamp(min_ts, tz=timezone.utc).strftime("%Y-%m-%d %H:%M")
-        max_dt = datetime.fromtimestamp(max_ts, tz=timezone.utc).strftime("%Y-%m-%d %H:%M")
+        min_dt = datetime.fromtimestamp(min_ts, tz=timezone.utc).strftime(
+            "%Y-%m-%d %H:%M"
+        )
+        max_dt = datetime.fromtimestamp(max_ts, tz=timezone.utc).strftime(
+            "%Y-%m-%d %H:%M"
+        )
         stats[asset] = {"count": count, "from": min_dt, "to": max_dt}
     return stats
 
@@ -130,10 +145,12 @@ async def main():
     log(f"   Cycle: every {CYCLE_SECONDS}s | Max age: {MAX_AGE_DAYS}d")
 
     conn = init_db()
-    exchange = ccxt.kraken({
-        "enableRateLimit": True,
-        "options": {"defaultType": "spot"},
-    })
+    exchange = ccxt.kraken(
+        {
+            "enableRateLimit": True,
+            "options": {"defaultType": "spot"},
+        }
+    )
 
     # Check connectivity and existing data
     try:

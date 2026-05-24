@@ -10,6 +10,7 @@ Every cycle:
   7. Check stop loss / take profit for open positions
   8. Log heartbeat
 """
+
 import asyncio
 import json
 import os
@@ -20,11 +21,28 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Optional
 
-from hermes_trading.adaptive import compute_dynamic_rsi_threshold, compute_hurst_exponent, compute_cusum_regime, compute_rsi_percentile_threshold, check_vol_sanity
+from hermes_trading.adaptive import (
+    compute_dynamic_rsi_threshold,
+    compute_hurst_exponent,
+    compute_cusum_regime,
+    compute_rsi_percentile_threshold,
+    check_vol_sanity,
+)
 
-from hermes_trading.universe import fetch_hl_meta_and_ctx, parse_universe, screen_and_rank, format_universe_report
+from hermes_trading.universe import (
+    fetch_hl_meta_and_ctx,
+    parse_universe,
+    screen_and_rank,
+    format_universe_report,
+)
 
-from hermes_trading.risk import PortfolioTracker, correlation_allows_entry, compute_correlations, compute_var, var_position_cap
+from hermes_trading.risk import (
+    PortfolioTracker,
+    correlation_allows_entry,
+    compute_correlations,
+    compute_var,
+    var_position_cap,
+)
 from hermes_trading.trust_state import compute_trust_state, status as trust_status
 from hermes_trading.optimizer import trades_ready, check_and_optimize
 
@@ -32,14 +50,23 @@ from hermes_trading.schema import SchemaError, validate_adapter_output
 
 
 class TradingLoop:
-    def __init__(self, assets: List[Dict], state_dir: Path, base_dir: Path, mode: str = "paper", initial_balance: float = 10000.0):
+    def __init__(
+        self,
+        assets: List[Dict],
+        state_dir: Path,
+        base_dir: Path,
+        mode: str = "paper",
+        initial_balance: float = 10000.0,
+    ):
         self.assets = assets
         self.state_dir = state_dir
         self.base_dir = base_dir
         self.mode = mode
         self.cycle_interval = 60  # seconds — check every minute
         self.max_consecutive_failures = 5
-        self.user_risk_accepted = os.environ.get("HERMES_TRADING_I_ACCEPT_RISK", "").lower() == "true"
+        self.user_risk_accepted = (
+            os.environ.get("HERMES_TRADING_I_ACCEPT_RISK", "").lower() == "true"
+        )
 
         # Open positions per asset
         self.positions: Dict[str, Optional[Dict]] = {a["key"]: None for a in assets}
@@ -48,7 +75,9 @@ class TradingLoop:
         self.cycles_since_last_trade: Dict[str, int] = {a["key"]: 999 for a in assets}
 
         # Trade count tracker (for reflection trigger)
-        self.trade_count_since_reflection: Dict[str, int] = {a["key"]: 0 for a in assets}
+        self.trade_count_since_reflection: Dict[str, int] = {
+            a["key"]: 0 for a in assets
+        }
 
         # Cached BTC context (refreshed once per cycle)
         self.btc_context: dict = {}
@@ -73,7 +102,9 @@ class TradingLoop:
         self.paused_assets: Dict[str, str] = {}  # asset_key -> timestamp when paused
 
         # Z-score cooling chamber (z-score < threshold triggers N-cycle block)
-        self.zscore_cooldown: Dict[str, int] = {}  # asset_key -> remaining blocked cycles
+        self.zscore_cooldown: Dict[
+            str, int
+        ] = {}  # asset_key -> remaining blocked cycles
 
         # BTC 1h realized vol history for surge detection
         self.btc_vol_history: List[float] = []  # rolling absolute 1h returns
@@ -87,19 +118,25 @@ class TradingLoop:
         # Phase 6: Advanced Risk Management
         self.correlations: dict = {}
         self.correlation_window = 90
-        self.portfolio_tracker = PortfolioTracker(initial_equity=10000.0, max_drawdown_pct=15.0)
+        self.portfolio_tracker = PortfolioTracker(
+            initial_equity=10000.0, max_drawdown_pct=15.0
+        )
         self.var_cache: dict = {}
         self.risk_log: list = []
 
         # Rolling win-rate tracking (Phase 2: 20-trade per asset, 50-trade portfolio)
-        self.asset_trade_results: Dict[str, list] = {a["key"]: [] for a in assets}  # bool: True=win, False=loss
+        self.asset_trade_results: Dict[str, list] = {
+            a["key"]: [] for a in assets
+        }  # bool: True=win, False=loss
         self.portfolio_trade_results: list = []  # global rolling trade outcomes
 
         # ADX danger zone gate (resamples 1m to 15m/1h, checks ADX + EMA200)
         self.adx_danger_blocked: Dict[str, bool] = {a["key"]: False for a in assets}
 
         # Phase 3: Trend-following sleeve (60/40 dual sleeve architecture)
-        self.trend_positions: Dict[str, Optional[Dict]] = {}  # asset_key -> position dict
+        self.trend_positions: Dict[
+            str, Optional[Dict]
+        ] = {}  # asset_key -> position dict
         self.trend_1h_candles: Dict[str, list] = {}  # asset_key -> [1h OHLC dicts]
         self.trend_1h_ready: Dict[str, bool] = {a["key"]: False for a in assets}
         self.trend_cooldown: Dict[str, int] = {}  # cycles since last trend entry
@@ -125,7 +162,12 @@ class TradingLoop:
     async def run(self):
         """Main loop — runs until cancelled."""
         sys.path.insert(0, str(self.base_dir))
-        from hermes_trading.adapters import PriceAdapter, OnChainAdapter, NewsAdapter, MacroAdapter
+        from hermes_trading.adapters import (
+            PriceAdapter,
+            OnChainAdapter,
+            NewsAdapter,
+            MacroAdapter,
+        )
 
         price = PriceAdapter(mode=self.mode)
         onchain = OnChainAdapter(mode=self.mode)
@@ -133,14 +175,18 @@ class TradingLoop:
         macro = MacroAdapter(mode=self.mode)
 
         print(f"🔄 Trading loop started — checking every {self.cycle_interval}s")
-        print(f"   Mode: {self.mode.upper()} | Assets: {', '.join(a['key'] for a in self.assets)}")
+        print(
+            f"   Mode: {self.mode.upper()} | Assets: {', '.join(a['key'] for a in self.assets)}"
+        )
         print(f"   Strategy: RSI entry (< threshold) + BTC market gate + FnG filter")
         first_strat = self._load_strategy(self.assets[0]["key"])
         default_cooldown = first_strat.get("cooldown_cycles", 30) if first_strat else 30
         print(f"   Cooldown: {default_cooldown} cycles (configurable per-asset)")
 
         if self.mode == "live" and not self.user_risk_accepted:
-            print("⚠️  LIVE MODE: Set HERMES_TRADING_I_ACCEPT_RISK=true to enable live trading")
+            print(
+                "⚠️  LIVE MODE: Set HERMES_TRADING_I_ACCEPT_RISK=true to enable live trading"
+            )
             print("   Worker will observe-only until flag is set")
 
         try:
@@ -151,7 +197,9 @@ class TradingLoop:
                 # ── Fetch Fear & Greed once per cycle ──
                 fng_data = await macro.fetch(self.assets[0]["key"])
                 if fng_data.get("available"):
-                    self.last_fear_greed = fng_data.get("indicators", {}).get("fear_greed", {})
+                    self.last_fear_greed = fng_data.get("indicators", {}).get(
+                        "fear_greed", {}
+                    )
 
                 # Phase 4: Fetch Hyperliquid market context (funding, OI, universe)
                 await self._fetch_hl_context()
@@ -172,7 +220,9 @@ class TradingLoop:
                     if not strategy:
                         continue
 
-                    await self._cycle(key, asset_cfg, strategy, price, onchain, news, macro)
+                    await self._cycle(
+                        key, asset_cfg, strategy, price, onchain, news, macro
+                    )
 
                 self._write_heartbeat()
                 await asyncio.sleep(self.cycle_interval)
@@ -182,7 +232,12 @@ class TradingLoop:
 
     async def _fetch_btc_context(self, price_adapter) -> dict:
         """Fetch BTC 1h candles and compute RSI on 1h and 4h timeframes."""
-        ctx = {"btc_1h_rsi": None, "btc_4h_rsi": None, "btc_price": None, "available": False}
+        ctx = {
+            "btc_1h_rsi": None,
+            "btc_4h_rsi": None,
+            "btc_price": None,
+            "available": False,
+        }
 
         try:
             # Fetch 1h BTC candles (need enough for RSI 14 on 4h sampling = ~60 1h candles)
@@ -195,7 +250,9 @@ class TradingLoop:
 
                 # 4h RSI: sample every 4th 1h close (need 14*4+1 = 57 candles minimum)
                 if len(closes_1h) >= 57:
-                    closes_4h = closes_1h[-(14 * 4):][::4]  # every 4th close for last 56 closes
+                    closes_4h = closes_1h[-(14 * 4) :][
+                        ::4
+                    ]  # every 4th close for last 56 closes
                     ctx["btc_4h_rsi"] = self._calc_rsi(closes_4h, period=14)
                 else:
                     # Fallback: use RSI on 1h data with longer period as proxy
@@ -203,8 +260,12 @@ class TradingLoop:
 
                 ctx["available"] = True
 
-            btc_status = f"1h={ctx['btc_1h_rsi']:.0f}" if ctx['btc_1h_rsi'] else "1h=---"
-            btc_status += f" 4h={ctx['btc_4h_rsi']:.0f}" if ctx['btc_4h_rsi'] else " 4h=---"
+            btc_status = (
+                f"1h={ctx['btc_1h_rsi']:.0f}" if ctx["btc_1h_rsi"] else "1h=---"
+            )
+            btc_status += (
+                f" 4h={ctx['btc_4h_rsi']:.0f}" if ctx["btc_4h_rsi"] else " 4h=---"
+            )
             print(f"  BTC: ${ctx['btc_price']:.0f} | RSI {btc_status}")
         except Exception as e:
             print(f"  ⚠ BTC context fetch failed: {e}")
@@ -243,7 +304,9 @@ class TradingLoop:
                     hla = lookup[symbol]
                     annualized = hla["funding_annualized_pct"]
                     oi_billions = hla["open_interest_usd"] / 1e9
-                    print(f"  📊 {symbol}: fund={annualized:+.3f}% APY | OI=${oi_billions:.2f}B")
+                    print(
+                        f"  📊 {symbol}: fund={annualized:+.3f}% APY | OI=${oi_billions:.2f}B"
+                    )
 
             # Run universe scan every 15 cycles (not bandwidth-heavy but rate-limit aware)
             if run_scan:
@@ -284,7 +347,7 @@ class TradingLoop:
 
     def _btc_gate_allows_entry(self, strategy: dict) -> tuple:
         """Check if BTC market conditions allow long entries.
-        
+
         Returns:
             (allowed: bool, reason: str)
         """
@@ -295,16 +358,22 @@ class TradingLoop:
         btc_1h_rsi = self.btc_context.get("btc_1h_rsi")
 
         if btc_4h_rsi is not None and btc_4h_rsi < btc_4h_min_rsi:
-            return (False, f"BTC 4h RSI {btc_4h_rsi:.0f} < {btc_4h_min_rsi} (too bearish)")
+            return (
+                False,
+                f"BTC 4h RSI {btc_4h_rsi:.0f} < {btc_4h_min_rsi} (too bearish)",
+            )
 
         if btc_1h_rsi is not None and btc_1h_rsi < btc_gate.get("min_btc_1h_rsi", 20):
-            return (False, f"BTC 1h RSI {btc_1h_rsi:.0f} < {btc_gate['min_btc_1h_rsi']} (deeply oversold)")
+            return (
+                False,
+                f"BTC 1h RSI {btc_1h_rsi:.0f} < {btc_gate['min_btc_1h_rsi']} (deeply oversold)",
+            )
 
         return (True, "")
 
     def _fng_gate_allows_entry(self, strategy: dict) -> tuple:
         """Check if Fear & Greed allows long entries.
-        
+
         Returns:
             (allowed: bool, reason: str)
         """
@@ -319,13 +388,13 @@ class TradingLoop:
 
     def _evaluate_entry(self, asset_key: str, candles: list, strategy: dict) -> tuple:
         """Entry Evaluator — second-opinion technical check before entering.
-        
+
         Checks:
           1. Lower low cascade — if last 3 lows each lower than prev, still dropping
           2. Volume panic — if current volume > 1.5x avg of last 10, panic selling
           3. Candle positioning — if price in bottom 30% of candle range, still weak
           4. Falling knife — if price below EMA20 - ATR*mult with volume spike
-          
+
         Returns:
             (allowed: bool, reason: str, features: dict)
         """
@@ -356,11 +425,17 @@ class TradingLoop:
         cascade_check = evaluator.get("lower_low_cascade", 3)
         features["cascade_check"] = cascade_check
         if cascade_check > 0 and len(lows) >= cascade_check + 1:
-            recent_lows = lows[-(cascade_check + 1):]
-            is_cascading = all(recent_lows[i] > recent_lows[i + 1] for i in range(cascade_check))
+            recent_lows = lows[-(cascade_check + 1) :]
+            is_cascading = all(
+                recent_lows[i] > recent_lows[i + 1] for i in range(cascade_check)
+            )
             features["cascade_found"] = is_cascading
             if is_cascading:
-                return (False, f"lower_low_cascade: {cascade_check} consec lower lows", features)
+                return (
+                    False,
+                    f"lower_low_cascade: {cascade_check} consec lower lows",
+                    features,
+                )
 
         # 2. Volume panic — current volume vs average
         vol_check = evaluator.get("volume_spike_mult", 1.5)
@@ -369,7 +444,11 @@ class TradingLoop:
             avg_vol = sum(volumes[-11:-1]) / 10
             features["volume_ratio"] = volumes[-1] / avg_vol if avg_vol > 0 else 0.0
             if avg_vol > 0 and volumes[-1] > avg_vol * vol_check:
-                return (False, f"volume_spike: {volumes[-1]/avg_vol:.1f}x avg", features)
+                return (
+                    False,
+                    f"volume_spike: {volumes[-1] / avg_vol:.1f}x avg",
+                    features,
+                )
 
         # 3. Candle positioning — where is price within current candle range
         pos_check = evaluator.get("min_candle_position", 0.30)
@@ -382,7 +461,11 @@ class TradingLoop:
                 position_in_candle = (closes[-1] - current_low) / candle_range
                 features["candle_position"] = round(position_in_candle, 4)
                 if position_in_candle < pos_check:
-                    return (False, f"candle_position: {position_in_candle:.0%} < {pos_check:.0%}", features)
+                    return (
+                        False,
+                        f"candle_position: {position_in_candle:.0%} < {pos_check:.0%}",
+                        features,
+                    )
 
         # 4. Falling knife prevention — ATR-based price drop + volume surge
         if evaluator.get("falling_knife_enabled", True) and len(candles) >= 25:
@@ -405,7 +488,9 @@ class TradingLoop:
                     current_price = closes[-1]
 
                     # Calculate drop distance in ATR units
-                    drop_from_ema = (ema20 - current_price) / atr_price if atr_price > 0 else 0
+                    drop_from_ema = (
+                        (ema20 - current_price) / atr_price if atr_price > 0 else 0
+                    )
                     features["falling_knife_check"] = round(drop_from_ema, 2)
 
                     if current_price < fk_price_threshold:
@@ -421,13 +506,23 @@ class TradingLoop:
                         features["falling_knife_vol"] = round(vol_ratio, 2)
 
                         if vol_ratio >= fk_vol_mult:
-                            return (False, f"falling_knife: price {drop_from_ema:.1f} ATR below EMA20, vol {vol_ratio:.1f}x", features)
+                            return (
+                                False,
+                                f"falling_knife: price {drop_from_ema:.1f} ATR below EMA20, vol {vol_ratio:.1f}x",
+                                features,
+                            )
 
         return (True, "evaluator_passed", features)
 
-    def _log_rejected_entry(self, asset_key: str, price: float, reason: str,
-                            rsi: Optional[float], threshold: float,
-                            eval_features: Optional[dict] = None):
+    def _log_rejected_entry(
+        self,
+        asset_key: str,
+        price: float,
+        reason: str,
+        rsi: Optional[float],
+        threshold: float,
+        eval_features: Optional[dict] = None,
+    ):
         """Log a rejected entry to rejections.jsonl for reflection analysis."""
         entry = {
             "asset": asset_key,
@@ -447,17 +542,24 @@ class TradingLoop:
         with open(rej_file, "a") as f:
             f.write(json.dumps(entry) + "\n")
 
-    def _log_evaluator_pass(self, asset_key: str, price: float,
-                            rsi: Optional[float], threshold: float,
-                            eval_features: dict):
+    def _log_evaluator_pass(
+        self,
+        asset_key: str,
+        price: float,
+        rsi: Optional[float],
+        threshold: float,
+        eval_features: dict,
+    ):
         """Log an evaluator pass (accepted entry) for analysis."""
         # Check benchmark targets for this asset
         from hermes_trading.optimizer import check_benchmarks
+
         trades_file = self.state_dir / asset_key / "trades.jsonl"
         bm_check = {"status": "insufficient_data"}
         if trades_file.exists():
             import json
-            tlines = [l for l in trades_file.read_text().strip().split('\n') if l]
+
+            tlines = [l for l in trades_file.read_text().strip().split("\n") if l]
             if len(tlines) >= 10:
                 recent = [json.loads(l) for l in tlines[-10:]]
                 bm_check = check_benchmarks(recent)
@@ -484,16 +586,25 @@ class TradingLoop:
                 "max_dd_target": bm_check.get("max_dd_target"),
                 "max_dd_current": bm_check.get("max_drawdown"),
                 "max_dd_met": bm_check.get("max_dd_met"),
-            } if bm_check.get("status") == "analyzed" else {},
+            }
+            if bm_check.get("status") == "analyzed"
+            else {},
         }
         log_file = self.state_dir / asset_key / "evaluator_log.jsonl"
         log_file.parent.mkdir(parents=True, exist_ok=True)
         with open(log_file, "a") as f:
             f.write(json.dumps(entry) + "\n")
 
-    def _log_evaluator_flag(self, asset_key: str, price: float, reason: str,
-                             rsi: Optional[float], threshold: float,
-                             eval_features: dict, score_override: bool = False):
+    def _log_evaluator_flag(
+        self,
+        asset_key: str,
+        price: float,
+        reason: str,
+        rsi: Optional[float],
+        threshold: float,
+        eval_features: dict,
+        score_override: bool = False,
+    ):
         """Log evaluator flag — evaluator noted something but confidence score overrode it.
 
         This replaces the old 'rejected_entry' log. The evaluator is informational
@@ -535,8 +646,16 @@ class TradingLoop:
             ctx["hl_available"] = True
         return ctx
 
-    async def _cycle(self, asset_key: str, goal: dict, strategy: dict,
-                     price_adapter, onchain_adapter, news_adapter, macro_adapter):
+    async def _cycle(
+        self,
+        asset_key: str,
+        goal: dict,
+        strategy: dict,
+        price_adapter,
+        onchain_adapter,
+        news_adapter,
+        macro_adapter,
+    ):
         """Run one trading cycle for a single asset."""
 
         # ── 1. Fetch data from all adapters ──
@@ -558,7 +677,9 @@ class TradingLoop:
 
         # ── 3. Check circuit breaker ──
         if price_adapter.consecutive_failures >= self.max_consecutive_failures:
-            print(f"🔴 {asset_key}: Circuit breaker — {price_adapter.consecutive_failures} consecutive failures")
+            print(
+                f"🔴 {asset_key}: Circuit breaker — {price_adapter.consecutive_failures} consecutive failures"
+            )
             return
 
         current_price = price_data.get("current_price", 0.0)
@@ -577,7 +698,9 @@ class TradingLoop:
         threshold = entry.get("threshold", 30)
         has_position = self.positions.get(asset_key) is not None
         cooldown_cycles = strategy.get("cooldown_cycles", 30)
-        cooldown_remaining = cooldown_cycles - self.cycles_since_last_trade.get(asset_key, 999)
+        cooldown_remaining = cooldown_cycles - self.cycles_since_last_trade.get(
+            asset_key, 999
+        )
         rsi_status = f"RSI={rsi:.1f}" if rsi is not None else "RSI=---"
 
         # Per-asset percentile RSI threshold (q05 majors / q10 alts from bars.db)
@@ -586,13 +709,19 @@ class TradingLoop:
         pct_rsi = self._compute_rsi_percentile_threshold(asset_key)
         if pct_rsi.get("active"):
             effective_threshold = pct_rsi["threshold"]
-            print(f"  {asset_key}: 📊 percentile RSI threshold={effective_threshold} ({pct_rsi['percentile']}th pctile, {pct_rsi['bars_used']} 1m bars)")
+            print(
+                f"  {asset_key}: 📊 percentile RSI threshold={effective_threshold} ({pct_rsi['percentile']}th pctile, {pct_rsi['bars_used']} 1m bars)"
+            )
         else:
             # Phase 3: Dynamic RSI Percentile (overrides fixed threshold when enough 1m bar data)
             dynamic = self._compute_dynamic_rsi(asset_key, strategy)
-            effective_threshold = dynamic["threshold"] if dynamic.get("active") else threshold
+            effective_threshold = (
+                dynamic["threshold"] if dynamic.get("active") else threshold
+            )
             if dynamic.get("active"):
-                print(f"  {asset_key}: 📊 dynamic RSI threshold={effective_threshold} ({dynamic['percentile']}th pctile, {dynamic['bars_used']} 1m bars)")
+                print(
+                    f"  {asset_key}: 📊 dynamic RSI threshold={effective_threshold} ({dynamic['percentile']}th pctile, {dynamic['bars_used']} 1m bars)"
+                )
             elif dynamic.get("reason") and dynamic["reason"] not in ("not enabled",):
                 pass  # silently accumulating data
 
@@ -616,7 +745,9 @@ class TradingLoop:
             elif h < 0.45:
                 hurst_mode = "mean_reversion"
                 hurst_signal = rsi is not None and rsi < effective_threshold
-                print(f"  {asset_key}: 🔄 MR mode (H={h:.3f}) — oversold entries (RSI<{effective_threshold})")
+                print(
+                    f"  {asset_key}: 🔄 MR mode (H={h:.3f}) — oversold entries (RSI<{effective_threshold})"
+                )
             else:
                 hurst_mode = "random_walk"
                 hurst_signal = rsi is not None and rsi < effective_threshold
@@ -626,7 +757,9 @@ class TradingLoop:
         cusum = self._compute_cusum(asset_key, strategy)
         if cusum.get("active"):
             regime_label = cusum["regime"].replace("_", " ")
-            print(f"  {asset_key}: 🔄 CUSUM {regime_label} ({cusum['up_breaks']}↑/{cusum['down_breaks']}↓ breaks)")
+            print(
+                f"  {asset_key}: 🔄 CUSUM {regime_label} ({cusum['up_breaks']}↑/{cusum['down_breaks']}↓ breaks)"
+            )
         elif cusum.get("reason") and cusum["reason"] not in ("not enabled",):
             pass  # silently accumulating data
 
@@ -645,21 +778,35 @@ class TradingLoop:
         # ── 6. Log current state ──
         if has_position:
             existing = self.positions[asset_key]
-            pnl_pct = ((current_price - existing["entry_price"]) / existing["entry_price"]) * 100
-            print(f"  {asset_key}: {rsi_status} | POSITION @ {existing['entry_price']:.2f} | PnL: {pnl_pct:+.2f}%")
+            pnl_pct = (
+                (current_price - existing["entry_price"]) / existing["entry_price"]
+            ) * 100
+            print(
+                f"  {asset_key}: {rsi_status} | POSITION @ {existing['entry_price']:.2f} | PnL: {pnl_pct:+.2f}%"
+            )
         elif rsi is not None and rsi < effective_threshold:
             if market_blocked:
-                print(f"  {asset_key}: {rsi_status} < {effective_threshold} (⬇ oversold) → MARKET GATE BLOCKED: {'; '.join(market_gate_reasons)}")
+                print(
+                    f"  {asset_key}: {rsi_status} < {effective_threshold} (⬇ oversold) → MARKET GATE BLOCKED: {'; '.join(market_gate_reasons)}"
+                )
             elif hurst.get("block_entry", False):
                 regime_label = hurst["regime"].replace("_", " ")
-                print(f"  {asset_key}: {rsi_status} < {effective_threshold} (⬇ oversold) → HURST REGIME BLOCKED: {regime_label} (H={hurst['hurst']:.4f})")
+                print(
+                    f"  {asset_key}: {rsi_status} < {effective_threshold} (⬇ oversold) → HURST REGIME BLOCKED: {regime_label} (H={hurst['hurst']:.4f})"
+                )
             elif cusum.get("block_entry", False):
                 regime_label = cusum["regime"].replace("_", " ")
-                print(f"  {asset_key}: {rsi_status} < {effective_threshold} (⬇ oversold) → CUSUM REGIME BLOCKED: {regime_label} ({cusum['up_breaks']}↑/{cusum['down_breaks']}↓)")
+                print(
+                    f"  {asset_key}: {rsi_status} < {effective_threshold} (⬇ oversold) → CUSUM REGIME BLOCKED: {regime_label} ({cusum['up_breaks']}↑/{cusum['down_breaks']}↓)"
+                )
             elif cooldown_remaining <= 0:
-                print(f"  {asset_key}: {rsi_status} < {effective_threshold} (⬇ oversold) → RSI MET, awaiting confidence score")
+                print(
+                    f"  {asset_key}: {rsi_status} < {effective_threshold} (⬇ oversold) → RSI MET, awaiting confidence score"
+                )
             else:
-                print(f"  {asset_key}: {rsi_status} < {effective_threshold} (⬇ oversold) → signal ready, cooldown {cooldown_remaining}")
+                print(
+                    f"  {asset_key}: {rsi_status} < {effective_threshold} (⬇ oversold) → signal ready, cooldown {cooldown_remaining}"
+                )
         else:
             threshold_display = f"{effective_threshold}"
             if dynamic and dynamic.get("active"):
@@ -668,7 +815,9 @@ class TradingLoop:
                 threshold_display += f" (pctile {pct_rsi['percentile']}th)"
             else:
                 threshold_display += f" (fixed {threshold})"
-            print(f"  {asset_key}: {rsi_status} ≥ {threshold_display} (waiting for oversold)")
+            print(
+                f"  {asset_key}: {rsi_status} ≥ {threshold_display} (waiting for oversold)"
+            )
 
         # ── 6b. Track stale prices ──
         self._check_stale_prices(price_data, asset_key)
@@ -676,14 +825,20 @@ class TradingLoop:
         # ── 6c. Trust-state + Monte Carlo DD status ──
         trust_label = self.trust_label
         if trust_label in ("low", "critical"):
-            print(f"  {asset_key}: 🛡️ Trust-state={trust_label} (×{self.trust_multiplier:.2f})")
+            print(
+                f"  {asset_key}: 🛡️ Trust-state={trust_label} (×{self.trust_multiplier:.2f})"
+            )
         if self.mc_dd_threshold is not None:
             dd = self.portfolio_tracker.status().get("drawdown_pct", 0)
-            print(f"  {asset_key}: 📉 MC DD threshold={self.mc_dd_threshold:.1f}% | current DD={dd:.1f}%")
+            print(
+                f"  {asset_key}: 📉 MC DD threshold={self.mc_dd_threshold:.1f}% | current DD={dd:.1f}%"
+            )
 
         # ── 7. Entry signal check (confidence score based) ──
         if not has_position:
-            enough_cooldown = self.cycles_since_last_trade.get(asset_key, 999) >= cooldown_cycles
+            enough_cooldown = (
+                self.cycles_since_last_trade.get(asset_key, 999) >= cooldown_cycles
+            )
 
             # Trust-state (updated every cycle)
             trust = self._compute_trust_state(asset_key, strategy)
@@ -698,7 +853,9 @@ class TradingLoop:
             # Z-score cooling chamber (flash crash guard — blocks entries for 30 cycles)
             if self.zscore_cooldown.get(asset_key, 0) > 0:
                 self.zscore_cooldown[asset_key] -= 1
-                safety_skip_reason = f"zscore_cooldown_{self.zscore_cooldown[asset_key]}"
+                safety_skip_reason = (
+                    f"zscore_cooldown_{self.zscore_cooldown[asset_key]}"
+                )
             else:
                 zs_blocked, zs_reason = self._check_zscore_flash(candles, asset_key)
                 if zs_blocked:
@@ -713,25 +870,36 @@ class TradingLoop:
                 safety_skip_reason = f"cooldown {self.cycles_since_last_trade.get(asset_key, 999)}/{cooldown_cycles}"
             elif not mc_dd_allowed:
                 dd_val = self.portfolio_tracker.status().get("drawdown_pct", 0)
-                safety_skip_reason = f"mc_dd: {dd_val:.1f}% >= {self.mc_dd_threshold:.1f}%"
+                safety_skip_reason = (
+                    f"mc_dd: {dd_val:.1f}% >= {self.mc_dd_threshold:.1f}%"
+                )
             else:
                 # Kill switches (consecutive losses, max positions, daily loss, stale prices)
-                ks_allowed, ks_reason = self._kill_switch_allows_entry(asset_key, strategy, candles)
+                ks_allowed, ks_reason = self._kill_switch_allows_entry(
+                    asset_key, strategy, candles
+                )
                 if not ks_allowed:
                     safety_skip_reason = f"kill_switch: {ks_reason}"
                 else:
                     # Portfolio DD gate
-                    portfolio_allowed, portfolio_reason = self.portfolio_tracker.allow_entry()
+                    portfolio_allowed, portfolio_reason = (
+                        self.portfolio_tracker.allow_entry()
+                    )
                     if not portfolio_allowed:
                         safety_skip_reason = f"portfolio_dd: {portfolio_reason}"
                     else:
                         # Correlation gate
                         if len(self.positions) > 1:
-                            open_keys = [k for k, v in self.positions.items() if v is not None]
+                            open_keys = [
+                                k for k, v in self.positions.items() if v is not None
+                            ]
                             if len(open_keys) >= 2 and asset_key not in open_keys:
                                 corr_allowed, corr_reason = correlation_allows_entry(
-                                    asset_key, self.correlations, self.positions,
-                                    max_same_side_alt=2, correlation_threshold=0.70,
+                                    asset_key,
+                                    self.correlations,
+                                    self.positions,
+                                    max_same_side_alt=2,
+                                    correlation_threshold=0.70,
                                 )
                                 if not corr_allowed:
                                     safety_skip_reason = f"correlation: {corr_reason}"
@@ -739,10 +907,15 @@ class TradingLoop:
                     # Hurst regime block: H > 0.55 = strictly disable MR
                     if not safety_skip_reason and hurst.get("block_entry", False):
                         regime_label = hurst.get("regime", "trending").replace("_", " ")
-                        safety_skip_reason = f"hurst_regime: {regime_label} (H={hurst['hurst']:.4f})"
+                        safety_skip_reason = (
+                            f"hurst_regime: {regime_label} (H={hurst['hurst']:.4f})"
+                        )
 
                     # Rolling win-rate gate (50-trade portfolio WR < 48% = halt)
-                    if not safety_skip_reason and len(self.portfolio_trade_results) >= 30:
+                    if (
+                        not safety_skip_reason
+                        and len(self.portfolio_trade_results) >= 30
+                    ):
                         recent_50 = self.portfolio_trade_results[-50:]
                         if len(recent_50) >= 30:
                             wr = sum(recent_50) / len(recent_50)
@@ -750,7 +923,9 @@ class TradingLoop:
                                 safety_skip_reason = f"wr_halt: portfolio WR {wr:.1%} < 48% ({len(recent_50)} trades)"
 
                     # ADX danger zone gate (15m ADX > 35 OR 1h ADX > 30 + price < EMA200)
-                    if not safety_skip_reason and self.adx_danger_blocked.get(asset_key, False):
+                    if not safety_skip_reason and self.adx_danger_blocked.get(
+                        asset_key, False
+                    ):
                         safety_skip_reason = f"adx_danger: higher TF trend extreme"
 
                     # 1m vol sanity gate (annualized 1m vol > 3.0 = broken data)
@@ -760,17 +935,38 @@ class TradingLoop:
                             safety_skip_reason = f"vol_sanity: {vs['reason']}"
 
             if safety_skip_reason:
-                self._log_skipped_setup(asset_key, current_price, safety_skip_reason, rsi, effective_threshold)
+                self._log_skipped_setup(
+                    asset_key,
+                    current_price,
+                    safety_skip_reason,
+                    rsi,
+                    effective_threshold,
+                )
                 if rsi is not None:
-                    rsi_display = f"{rsi:.1f} < {effective_threshold}" if rsi < effective_threshold else f"{rsi:.1f} ≥ {effective_threshold}"
-                    print(f"  {asset_key}: {rsi_display} → SAFETY BLOCKED: {safety_skip_reason}")
+                    rsi_display = (
+                        f"{rsi:.1f} < {effective_threshold}"
+                        if rsi < effective_threshold
+                        else f"{rsi:.1f} ≥ {effective_threshold}"
+                    )
+                    print(
+                        f"  {asset_key}: {rsi_display} → SAFETY BLOCKED: {safety_skip_reason}"
+                    )
                 else:
-                    print(f"  {asset_key}: RSI=N/A → SAFETY BLOCKED: {safety_skip_reason}")
+                    print(
+                        f"  {asset_key}: RSI=N/A → SAFETY BLOCKED: {safety_skip_reason}"
+                    )
             else:
                 # ── All safety gates passed → compute confidence score ──
                 confidence = self._compute_confidence_score(
-                    asset_key, rsi, effective_threshold, candles, strategy,
-                    hurst, hurst_mode, btc_allowed, fng_allowed,
+                    asset_key,
+                    rsi,
+                    effective_threshold,
+                    candles,
+                    strategy,
+                    hurst,
+                    hurst_mode,
+                    btc_allowed,
+                    fng_allowed,
                 )
                 cs = confidence["score"]
                 decision = confidence["decision"]
@@ -778,27 +974,68 @@ class TradingLoop:
 
                 if decision == "full" or decision == "half":
                     # Log evaluator features for analysis (informational only — not a gate)
-                    eval_allowed, eval_reason, eval_features = self._evaluate_entry(asset_key, candles, strategy)
+                    eval_allowed, eval_reason, eval_features = self._evaluate_entry(
+                        asset_key, candles, strategy
+                    )
                     eval_noted = not eval_allowed
                     if eval_noted:
-                        self._log_evaluator_flag(asset_key, current_price, eval_reason, rsi, effective_threshold, eval_features, score_override=True)
+                        self._log_evaluator_flag(
+                            asset_key,
+                            current_price,
+                            eval_reason,
+                            rsi,
+                            effective_threshold,
+                            eval_features,
+                            score_override=True,
+                        )
                     else:
-                        self._log_evaluator_pass(asset_key, current_price, rsi, effective_threshold, eval_features)
+                        self._log_evaluator_pass(
+                            asset_key,
+                            current_price,
+                            rsi,
+                            effective_threshold,
+                            eval_features,
+                        )
 
                     # Position sizing with VBPS (volatility-based)
-                    position_size_r = self._calc_position_size(asset_key, candles, strategy, hurst_mode)
+                    position_size_r = self._calc_position_size(
+                        asset_key, candles, strategy, hurst_mode
+                    )
                     if decision == "half":
                         position_size_r *= 0.5
 
                     ctx = self._current_market_context()
-                    signal_label = "rsi_oversold" if decision == "full" else "rsi_oversold_half"
-                    confidence_score = confidence["score"] if decision in ("full", "half") else None
-                    self._open_position(asset_key, current_price, position_size_r, signal_label, price_data, ctx, confidence_score)
+                    signal_label = (
+                        "rsi_oversold" if decision == "full" else "rsi_oversold_half"
+                    )
+                    confidence_score = (
+                        confidence["score"] if decision in ("full", "half") else None
+                    )
+                    self._open_position(
+                        asset_key,
+                        current_price,
+                        position_size_r,
+                        signal_label,
+                        price_data,
+                        ctx,
+                        confidence_score,
+                    )
 
-                    print(f"  {asset_key}: RSI={rsi:.1f} < {effective_threshold} -> ENTRY ({decision}, score={cs:.3f}, rsi={comp['rsi']:.2f} vol={comp['volume']:.2f} reg={comp['regime']:.2f} adx={comp['adx']:.2f} fund={comp['funding']:.2f})")
+                    print(
+                        f"  {asset_key}: RSI={rsi:.1f} < {effective_threshold} -> ENTRY ({decision}, score={cs:.3f}, rsi={comp['rsi']:.2f} vol={comp['volume']:.2f} reg={comp['regime']:.2f} adx={comp['adx']:.2f} fund={comp['funding']:.2f})"
+                    )
                 else:
-                    self._log_skipped_setup(asset_key, current_price, f"low_confidence:{cs:.3f}", rsi, effective_threshold, confidence)
-                    print(f"  {asset_key}: RSI={rsi:.1f} < {effective_threshold} -> LOW CONFIDENCE (score={cs:.3f}, below 0.55, comp: rsi={comp['rsi']:.2f} vol={comp['volume']:.2f} reg={comp['regime']:.2f} fund={comp.get('funding',0):.2f})")
+                    self._log_skipped_setup(
+                        asset_key,
+                        current_price,
+                        f"low_confidence:{cs:.3f}",
+                        rsi,
+                        effective_threshold,
+                        confidence,
+                    )
+                    print(
+                        f"  {asset_key}: RSI={rsi:.1f} < {effective_threshold} -> LOW CONFIDENCE (score={cs:.3f}, below 0.55, comp: rsi={comp['rsi']:.2f} vol={comp['volume']:.2f} reg={comp['regime']:.2f} fund={comp.get('funding', 0):.2f})"
+                    )
 
         # ── 8. Exit check for existing position ──
         existing = self.positions.get(asset_key)
@@ -823,57 +1060,96 @@ class TradingLoop:
             # ── 8a. Hard stop loss — always active, full position ──
             if pnl_pct < -stop_loss_pct:
                 ctx = self._current_market_context()
-                self._close_position(asset_key, current_price, pnl_pct, "stop_loss", price_data, ctx)
+                self._close_position(
+                    asset_key, current_price, pnl_pct, "stop_loss", price_data, ctx
+                )
 
             # ── 8b. Time-based exit — close if held beyond max cycles ──
             elif self._check_time_exit(asset_key, existing, current_price, strategy):
                 ctx = self._current_market_context()
                 pnl_exit = ((current_price - entry_price) / entry_price) * 100
-                self._close_position(asset_key, current_price, pnl_exit, "time_exit", price_data, ctx)
+                self._close_position(
+                    asset_key, current_price, pnl_exit, "time_exit", price_data, ctx
+                )
                 print(f"  {asset_key}: ⏰ TIME EXIT @ {current_price:.4f}")
 
             else:
                 # ── 8c. Update chandelier high-water mark ──
-                existing["chandelier_high"] = max(existing.get("chandelier_high", entry_price), current_price)
+                existing["chandelier_high"] = max(
+                    existing.get("chandelier_high", entry_price), current_price
+                )
 
                 # ── 8d. Scale-out TP1 (50% at 20 EMA reversion) ──
                 if not existing.get("scaled_out", False) and len(candles) >= 22:
-                    ema_value = self._calc_ema_value([c["close"] for c in candles], period=20)
+                    ema_value = self._calc_ema_value(
+                        [c["close"] for c in candles], period=20
+                    )
                     prev_close = candles[-2]["close"]
-                    if ema_value is not None and prev_close < ema_value and current_price >= ema_value:
+                    if (
+                        ema_value is not None
+                        and prev_close < ema_value
+                        and current_price >= ema_value
+                    ):
                         # Price crossed above 20 EMA — scale out 50%
                         ctx = self._current_market_context()
-                        self._close_position(asset_key, current_price, pnl_pct, "scale_out_tp1", price_data, ctx, partial=True)
-                        print(f"  {asset_key}: ✅ SCALE OUT 50% @ {current_price:.4f} (EMA reversion)")
+                        self._close_position(
+                            asset_key,
+                            current_price,
+                            pnl_pct,
+                            "scale_out_tp1",
+                            price_data,
+                            ctx,
+                            partial=True,
+                        )
+                        print(
+                            f"  {asset_key}: ✅ SCALE OUT 50% @ {current_price:.4f} (EMA reversion)"
+                        )
 
                 # ── 8e. Chandelier trailing stop on remaining position ──
                 if existing.get("scaled_out", False):
                     ch_mult = strategy.get("chandelier_mult_alts", 4.0)
                     if "BTC" in asset_key or "ETH" in asset_key:
                         ch_mult = strategy.get("chandelier_mult_major", 2.5)
-                    chandelier = self._calc_chandelier_exit(candles, existing["chandelier_high"], ch_mult)
+                    chandelier = self._calc_chandelier_exit(
+                        candles, existing["chandelier_high"], ch_mult
+                    )
                     if chandelier is not None and current_price < chandelier:
                         ctx = self._current_market_context()
-                        remaining_pnl = ((current_price - entry_price) / entry_price) * 100
-                        self._close_position(asset_key, current_price, remaining_pnl, "chandelier_exit", price_data, ctx)
-                        print(f"  {asset_key}: 🔚 CHANDELIER EXIT @ {current_price:.4f} (trailed from {existing['chandelier_high']:.4f})")
+                        remaining_pnl = (
+                            (current_price - entry_price) / entry_price
+                        ) * 100
+                        self._close_position(
+                            asset_key,
+                            current_price,
+                            remaining_pnl,
+                            "chandelier_exit",
+                            price_data,
+                            ctx,
+                        )
+                        print(
+                            f"  {asset_key}: 🔚 CHANDELIER EXIT @ {current_price:.4f} (trailed from {existing['chandelier_high']:.4f})"
+                        )
 
         # ── 8e. Check optimizer readiness (dormant until 200+ trades) ──
         self._check_optimizer_ready(asset_key)
 
         # ── 10. Trend-Following Sleeve (Phase 3 — BTC/ETH/SOL only) ──
         if asset_key in self.trend_universe:
-            await self._manage_trend_sleeve(asset_key, current_price, strategy, price_data, hurst)
+            await self._manage_trend_sleeve(
+                asset_key, current_price, strategy, price_data, hurst
+            )
 
         # ── 9. Increment cooldown counter ──
-        self.cycles_since_last_trade[asset_key] = self.cycles_since_last_trade.get(asset_key, 0) + 1
+        self.cycles_since_last_trade[asset_key] = (
+            self.cycles_since_last_trade.get(asset_key, 0) + 1
+        )
 
     def _calc_rsi(self, closes: List[float], period: int = 14) -> Optional[float]:
         """Calculate RSI from a list of close prices."""
         if len(closes) < period + 1:
             return None
 
-        deltas = [closes[i] - closes[i-1] for i in range(1, len(closes))]
+        deltas = [closes[i] - closes[i - 1] for i in range(1, len(closes))]
         gains = [d if d > 0 else 0 for d in deltas[-period:]]
         losses = [-d if d < 0 else 0 for d in deltas[-period:]]
 
@@ -952,9 +1228,16 @@ class TradingLoop:
     # ── Confidence Score (replaces linear gate chain) ──
 
     def _compute_confidence_score(
-        self, asset_key: str, rsi: Optional[float], effective_threshold: float,
-        candles: list, strategy: dict, hurst: dict, hurst_mode: str,
-        btc_allowed: bool, fng_allowed: bool,
+        self,
+        asset_key: str,
+        rsi: Optional[float],
+        effective_threshold: float,
+        candles: list,
+        strategy: dict,
+        hurst: dict,
+        hurst_mode: str,
+        btc_allowed: bool,
+        fng_allowed: bool,
     ) -> dict:
         """Compute a weighted confidence score for entry decisions.
 
@@ -996,7 +1279,9 @@ class TradingLoop:
             volumes = [c.get("volume", 0) or 0 for c in candles]
             recent_volumes = volumes[-11:] if len(volumes) >= 11 else volumes
             # yfinance doesn't provide crypto volume (all zeros) — detect this
-            has_real_volume = any(v > 0 for v in recent_volumes[:-1] if v > 0)  # check prior candles
+            has_real_volume = any(
+                v > 0 for v in recent_volumes[:-1] if v > 0
+            )  # check prior candles
             if has_real_volume and volumes[-1] > 0:
                 avg_vol = sum(recent_volumes[:-1]) / max(len(recent_volumes) - 1, 1)
                 if avg_vol > 0:
@@ -1011,8 +1296,10 @@ class TradingLoop:
             cascade_check = evaluator.get("lower_low_cascade", 3)
             lows = [c["low"] for c in candles]
             if len(lows) >= cascade_check + 1:
-                recent_lows = lows[-(cascade_check + 1):]
-                is_cascading = all(recent_lows[i] > recent_lows[i + 1] for i in range(cascade_check))
+                recent_lows = lows[-(cascade_check + 1) :]
+                is_cascading = all(
+                    recent_lows[i] > recent_lows[i + 1] for i in range(cascade_check)
+                )
                 if is_cascading:
                     lower_low_score = 0.0
 
@@ -1024,7 +1311,9 @@ class TradingLoop:
             if candle_range > 0:
                 pos = (last["close"] - last["low"]) / candle_range
                 # Lower position = better for MR (price at bottom of range)
-                candle_pos_score = max(0.0, 1.0 - pos * 1.5)  # 0.0 pos→1.0, 0.5 pos→0.25, 0.67+→0.0
+                candle_pos_score = max(
+                    0.0, 1.0 - pos * 1.5
+                )  # 0.0 pos→1.0, 0.5 pos→0.25, 0.67+→0.0
 
         # ── 5. Regime Score ──
         regime_score = 0.5  # default neutral
@@ -1033,7 +1322,9 @@ class TradingLoop:
         elif hurst_mode == "mean_reversion":
             regime_score = 0.8 if hurst.get("active") else 0.6
         elif hurst_mode == "random_walk":
-            regime_score = 0.6  # reduced MR (was 0.2 — too restrictive per research spec)
+            regime_score = (
+                0.6  # reduced MR (was 0.2 — too restrictive per research spec)
+            )
 
         # ── 6. ADX Score (low ADX = good for mean reversion) ──
         adx_score = 0.5
@@ -1057,7 +1348,9 @@ class TradingLoop:
         if symbol in hl_assets:
             fr_1h = hl_assets[symbol].get("funding_rate", 0)  # raw per-hour funding
             if fr_1h is not None:
-                raw_score = (fr_1h * 8) / 0.001  # ×8: -0.1% per 8h maps to -1.0 (max signal per spec)
+                raw_score = (
+                    fr_1h * 8
+                ) / 0.001  # ×8: -0.1% per 8h maps to -1.0 (max signal per spec)
                 raw_score = max(-1.0, min(1.0, raw_score))  # cap at ±1.0
                 # Negative = bullish for MR longs → positive 0-1 score
                 funding_score = max(0.0, -raw_score)
@@ -1108,8 +1401,12 @@ class TradingLoop:
     # ── Skipped-setup logging ──
 
     def _log_skipped_setup(
-        self, asset_key: str, price: float, reason: str,
-        rsi: Optional[float], threshold: float,
+        self,
+        asset_key: str,
+        price: float,
+        reason: str,
+        rsi: Optional[float],
+        threshold: float,
         confidence: Optional[dict] = None,
     ):
         """Log every cycle where the bot chose not to enter.
@@ -1140,9 +1437,16 @@ class TradingLoop:
         with open(log_file, "a") as f:
             f.write(json.dumps(entry) + "\n")
 
-    def _open_position(self, asset_key: str, price: float, size_r: float,
-                       signal: str, price_data: dict, market_ctx: dict,
-                       confidence_score: Optional[float] = None):
+    def _open_position(
+        self,
+        asset_key: str,
+        price: float,
+        size_r: float,
+        signal: str,
+        price_data: dict,
+        market_ctx: dict,
+        confidence_score: Optional[float] = None,
+    ):
         """Open a paper position."""
         position = {
             "asset": asset_key,
@@ -1154,17 +1458,26 @@ class TradingLoop:
             "entry_source": price_data.get("source", "unknown"),
             "market_context": market_ctx,
             "confidence_score": confidence_score,
-            "scaled_out": False,         # TP1 (50% at EMA reversion) taken?
-            "chandelier_high": price,    # highest price since entry (for trailing)
+            "scaled_out": False,  # TP1 (50% at EMA reversion) taken?
+            "chandelier_high": price,  # highest price since entry (for trailing)
         }
         self.positions[asset_key] = position
-        print(f"📈 {asset_key}: OPEN at {price:.6f} | signal={signal} | size_r={size_r}")
+        print(
+            f"📈 {asset_key}: OPEN at {price:.6f} | signal={signal} | size_r={size_r}"
+        )
 
-    def _close_position(self, asset_key: str, price: float, pnl_pct: float,
-                        reason: str, price_data: dict, market_ctx: dict = None,
-                        partial: bool = False):
+    def _close_position(
+        self,
+        asset_key: str,
+        price: float,
+        pnl_pct: float,
+        reason: str,
+        price_data: dict,
+        market_ctx: dict = None,
+        partial: bool = False,
+    ):
         """Close a paper position and log the trade.
-        
+
         If partial=True, closes 50% of position (scale-out TP1) and keeps remaining open.
         Otherwise closes the full position.
         """
@@ -1221,26 +1534,37 @@ class TradingLoop:
             self.trade_count_since_reflection[asset_key] += 1
 
         label = "PARTIAL" if partial else "CLOSE"
-        print(f"📉 {asset_key}: {label} at {price:.6f} | PnL: {pnl_pct:+.2f}% | reason={reason}")
+        print(
+            f"📉 {asset_key}: {label} at {price:.6f} | PnL: {pnl_pct:+.2f}% | reason={reason}"
+        )
 
         # ── Track daily PnL (Step 5: Kill Switches) ──
         today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         if today != self.last_daily_reset:
             self.daily_pnl_pct = 0.0
             self.last_daily_reset = today
-        self.daily_pnl_pct = (self.daily_pnl_pct or 0) + pnl_pct
+        self.daily_pnl_pct = (self.daily_pnl_pct or 0) + pnl_pct * close_size
 
         # ── Track consecutive losses (full closes only) ──
         if not partial:
             if pnl_pct < 0:
-                self.consecutive_losses[asset_key] = self.consecutive_losses.get(asset_key, 0) + 1
+                self.consecutive_losses[asset_key] = (
+                    self.consecutive_losses.get(asset_key, 0) + 1
+                )
                 # P3: Auto-pause check
                 strategy = self._load_strategy(asset_key)
                 ks = strategy.get("kill_switches", {})
                 max_cl = ks.get("max_consecutive_losses", 5)
-                if self.consecutive_losses[asset_key] >= max_cl and asset_key not in self.paused_assets:
-                    self.paused_assets[asset_key] = datetime.now(timezone.utc).isoformat()
-                    print(f"🔴 {asset_key}: AUTO-PAUSED after {self.consecutive_losses[asset_key]} consecutive losses")
+                if (
+                    self.consecutive_losses[asset_key] >= max_cl
+                    and asset_key not in self.paused_assets
+                ):
+                    self.paused_assets[asset_key] = datetime.now(
+                        timezone.utc
+                    ).isoformat()
+                    print(
+                        f"🔴 {asset_key}: AUTO-PAUSED after {self.consecutive_losses[asset_key]} consecutive losses"
+                    )
             else:
                 # Winning trade — reset streak and unpause
                 was_paused = asset_key in self.paused_assets
@@ -1255,17 +1579,23 @@ class TradingLoop:
             self.portfolio_trade_results.append(is_win)
             # Keep rolling windows bounded
             if len(self.asset_trade_results[asset_key]) > 50:
-                self.asset_trade_results[asset_key] = self.asset_trade_results[asset_key][-50:]
+                self.asset_trade_results[asset_key] = self.asset_trade_results[
+                    asset_key
+                ][-50:]
             if len(self.portfolio_trade_results) > 100:
                 self.portfolio_trade_results = self.portfolio_trade_results[-100:]
 
         # ── Phase 6: Update portfolio tracker ──
-        self.portfolio_tracker.update([{"pnl_pct": pnl_pct}])
+        # Scale position-level PnL% by allocation fraction to get account-level PnL%
+        account_pnl_pct = pnl_pct * close_size
+        self.portfolio_tracker.update([{"pnl_pct": account_pnl_pct}])
 
         # ── Track paper balance in dollars ──
         account_pnl_dollars = pnl_pct / 100 * close_size * self.paper_balance
         self.paper_balance += account_pnl_dollars
-        print(f"💰 {asset_key}: Paper balance ${self.paper_balance:.2f} (${account_pnl_dollars:+.2f} on this trade)")
+        print(
+            f"💰 {asset_key}: Paper balance ${self.paper_balance:.2f} (${account_pnl_dollars:+.2f} on this trade)"
+        )
 
     # ── Step 4: ADX Trend Filter ──────────────────────────────────────────
 
@@ -1320,7 +1650,9 @@ class TradingLoop:
             return None
         return round(sum(dx_list[-period:]) / period, 2)
 
-    def _calc_ema_slope(self, closes: list, period: int = 20, slope_bars: int = 3) -> Optional[float]:
+    def _calc_ema_slope(
+        self, closes: list, period: int = 20, slope_bars: int = 3
+    ) -> Optional[float]:
         """EMA slope as fraction of price per bar. Positive = uptrend."""
         if len(closes) < period + slope_bars:
             return None
@@ -1382,14 +1714,20 @@ class TradingLoop:
             if slope is None:
                 return (True, "insufficient_data_slope", features)
             if abs(slope) > mx:
-                return (False, f"EMA slope {slope:.6f} > {mx} (moderate trend)", features)
+                return (
+                    False,
+                    f"EMA slope {slope:.6f} > {mx} (moderate trend)",
+                    features,
+                )
 
         features["atr"] = self._calc_atr(candles, period=tf.get("atr_period", 14))
         return (True, f"ADX {adx:.1f} trend OK", features)
 
     # ── Step 5: Kill Switches ─────────────────────────────────────────────
 
-    def _kill_switch_allows_entry(self, asset_key: str, strategy: dict, candles: list = None) -> tuple:
+    def _kill_switch_allows_entry(
+        self, asset_key: str, strategy: dict, candles: list = None
+    ) -> tuple:
         """Check kill switches before entry. Returns (allowed, reason)."""
         ks = strategy.get("kill_switches", {})
         if not ks.get("enabled", True):
@@ -1402,7 +1740,10 @@ class TradingLoop:
 
         max_loss = ks.get("max_daily_loss_pct", 2.5)
         if self.daily_pnl_pct is not None and self.daily_pnl_pct <= -max_loss:
-            return (False, f"KILL: daily PnL {self.daily_pnl_pct:+.2f}% <= -{max_loss}%")
+            return (
+                False,
+                f"KILL: daily PnL {self.daily_pnl_pct:+.2f}% <= -{max_loss}%",
+            )
 
         max_stale = ks.get("stale_price_cycles", 5)
         stale_this = self.stale_price_cycles.get(asset_key, 0)
@@ -1413,7 +1754,10 @@ class TradingLoop:
         max_cl = ks.get("max_consecutive_losses", 5)
         cl = self.consecutive_losses.get(asset_key, 0)
         if cl >= max_cl:
-            return (False, f"KILL: {cl} consecutive losses (max {max_cl}) — asset paused")
+            return (
+                False,
+                f"KILL: {cl} consecutive losses (max {max_cl}) — asset paused",
+            )
 
         # Microstructure volume filter: exclude assets with < $30M 24h volume
         if self.hl_context.get("available"):
@@ -1422,7 +1766,7 @@ class TradingLoop:
             if hl_asset:
                 vol_24h = hl_asset.get("volume_24h", 0)
                 if vol_24h is not None and vol_24h < 30_000_000:
-                    return (False, f"KILL: {symbol} vol ${vol_24h/1e6:.1f}M < $30M")
+                    return (False, f"KILL: {symbol} vol ${vol_24h / 1e6:.1f}M < $30M")
 
         # OI Velocity gate: > 15% OI expansion in ~48h = institutional trend-building
         if len(self.oi_snapshots) > 0:
@@ -1431,7 +1775,10 @@ class TradingLoop:
             if len(snaps) >= 48:
                 earliest_oi = snaps[0]
                 if earliest_oi > 0 and snaps[-1] > earliest_oi * 1.15:
-                    return (False, f"KILL: OI {snaps[-1]/earliest_oi:.2f}x in ~48h (> 15%)")
+                    return (
+                        False,
+                        f"KILL: OI {snaps[-1] / earliest_oi:.2f}x in ~48h (> 15%)",
+                    )
 
         # Bid-ask spread proxy: avg (high-low)/close over last 5 candles
         # ≤ 0.08% = tight execution spreads for 1m MR
@@ -1443,7 +1790,10 @@ class TradingLoop:
                     spreads.append(spread_pct)
             if spreads and sum(spreads) / len(spreads) > 0.0008:
                 avg_spread = sum(spreads) / len(spreads) * 100
-                return (False, f"KILL: {asset_key.split('_')[0]} spread {avg_spread:.4f}% > 0.08%")
+                return (
+                    False,
+                    f"KILL: {asset_key.split('_')[0]} spread {avg_spread:.4f}% > 0.08%",
+                )
 
         return (True, "")
 
@@ -1452,15 +1802,22 @@ class TradingLoop:
         cur = price_data.get("current_price", 0)
         last = self.last_prices.get(asset_key)
         if last is not None and cur == last:
-            self.stale_price_cycles[asset_key] = self.stale_price_cycles.get(asset_key, 0) + 1
+            self.stale_price_cycles[asset_key] = (
+                self.stale_price_cycles.get(asset_key, 0) + 1
+            )
         else:
             self.stale_price_cycles[asset_key] = 0
         self.last_prices[asset_key] = cur
 
     # ── Step 6: Position Sizing ───────────────────────────────────────────
 
-    def _calc_position_size(self, asset_key: str, candles: list, strategy: dict,
-                            hurst_mode: str = "mean_reversion") -> float:
+    def _calc_position_size(
+        self,
+        asset_key: str,
+        candles: list,
+        strategy: dict,
+        hurst_mode: str = "mean_reversion",
+    ) -> float:
         """Volatility-Based Position Sizing (VBPS) — research spec §5.
 
         R_base = 1.0% of account equity per trade.
@@ -1498,7 +1855,7 @@ class TradingLoop:
         ls = self.consecutive_losses.get(asset_key, 0)
         if ls > 0:
             sr = ps.get("streak_reduction", 0.5)
-            ss = max(sr ** ls, ps.get("max_streak_reduction", 0.25))
+            ss = max(sr**ls, ps.get("max_streak_reduction", 0.25))
         else:
             ss = 1.0
 
@@ -1513,10 +1870,14 @@ class TradingLoop:
         var_pct = compute_var(closes, confidence=0.95)
         if var_pct is not None:
             vr = ps.get("var_risk_fraction", 0.10)
-            var_cap = var_position_cap(equity=self.paper_balance, var_pct=var_pct, max_var_exposure=vr)
-            self.var_cache[asset_key] = {"var_pct": round(var_pct * 100, 2),
-                                         "cap": round(var_cap, 4),
-                                         "timestamp": datetime.now(timezone.utc).isoformat()}
+            var_cap = var_position_cap(
+                equity=self.paper_balance, var_pct=var_pct, max_var_exposure=vr
+            )
+            self.var_cache[asset_key] = {
+                "var_pct": round(var_pct * 100, 2),
+                "cap": round(var_cap, 4),
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            }
         else:
             var_cap = 1.0
 
@@ -1537,12 +1898,13 @@ class TradingLoop:
             ema = closes[i] * m + ema * (1 - m)
         return ema
 
-    def _calc_chandelier_exit(self, candles: list, high_since_entry: float,
-                              multiplier: float = 4.0) -> Optional[float]:
+    def _calc_chandelier_exit(
+        self, candles: list, high_since_entry: float, multiplier: float = 4.0
+    ) -> Optional[float]:
         """Calculate Chandelier Exit level for long positions.
-        
+
         Chandelier Exit = Highest High (since entry) - ATR * multiplier
-        
+
         Trails upward as price increases — never moves down.
         """
         atr_pct = self._calc_atr(candles, period=14)
@@ -1553,7 +1915,9 @@ class TradingLoop:
         chandelier = high_since_entry - (atr_price * multiplier)
         return chandelier
 
-    def _check_time_exit(self, asset_key: str, position: dict, current_price: float, strategy: dict) -> bool:
+    def _check_time_exit(
+        self, asset_key: str, position: dict, current_price: float, strategy: dict
+    ) -> bool:
         """Check if position has exceeded max holding period.
 
         Closes position at market price if held beyond configurable cycle limits.
@@ -1565,7 +1929,9 @@ class TradingLoop:
             return False
         try:
             entry_dt = datetime.fromisoformat(entry_time_str)
-            elapsed_cycles = (datetime.now(timezone.utc) - entry_dt).total_seconds() / 60
+            elapsed_cycles = (
+                datetime.now(timezone.utc) - entry_dt
+            ).total_seconds() / 60
             is_major = "BTC" in asset_key or "ETH" in asset_key
             max_cycles = strategy.get("time_exit_cycles", 60 if is_major else 45)
             return elapsed_cycles >= max_cycles
@@ -1574,9 +1940,14 @@ class TradingLoop:
 
     # ── Phase 3: Trend-Following Sleeve Manager ─────────────────────────
 
-    async def _manage_trend_sleeve(self, asset_key: str, current_price: float,
-                                    strategy: dict, price_data: dict,
-                                    hurst: dict):
+    async def _manage_trend_sleeve(
+        self,
+        asset_key: str,
+        current_price: float,
+        strategy: dict,
+        price_data: dict,
+        hurst: dict,
+    ):
         """Run trend sleeve cycle for a major asset (BTC/ETH/SOL).
 
         Entry conditions (per spec):
@@ -1598,20 +1969,32 @@ class TradingLoop:
             bars_1m = self._read_1m_bars(asset_key)
             candles_1h = self._resample_1h_candles(bars_1m)
             if len(candles_1h) >= 15:
-                chandelier = self._calc_trend_chandelier(asset_key, trend_pos, candles_1h)
+                chandelier = self._calc_trend_chandelier(
+                    asset_key, trend_pos, candles_1h
+                )
                 if chandelier is not None and current_price < chandelier:
                     entry = trend_pos["entry_price"]
                     pnl_pct = ((current_price - entry) / entry) * 100
                     ctx = self._current_market_context()
-                    self._close_position(asset_key, current_price, pnl_pct,
-                                         "trend_chandelier", price_data, ctx)
+                    self._close_position(
+                        asset_key,
+                        current_price,
+                        pnl_pct,
+                        "trend_chandelier",
+                        price_data,
+                        ctx,
+                    )
                     self.trend_positions[asset_key] = None
-                    print(f"  {asset_key}: 🔚 TREND CHANDELIER EXIT @ {current_price:.4f}")
+                    print(
+                        f"  {asset_key}: 🔚 TREND CHANDELIER EXIT @ {current_price:.4f}"
+                    )
                     return
             # Still in trend — log status
             entry = trend_pos["entry_price"]
             pnl_pct = ((current_price - entry) / entry) * 100
-            print(f"  {asset_key}: 📈 TREND POSITION @ {entry:.2f} | PnL: {pnl_pct:+.2f}%")
+            print(
+                f"  {asset_key}: 📈 TREND POSITION @ {entry:.2f} | PnL: {pnl_pct:+.2f}%"
+            )
             return
 
         # ── Entry check ──
@@ -1643,8 +2026,9 @@ class TradingLoop:
         # ── Entry confirmed ──
         # VBPS for trend: R_base=0.01, stop_distance=atr_pct*multiplier (wider = smaller size)
         candles_1m = price_data.get("candles", [])
-        size_r = self._calc_position_size(asset_key, candles_1m, strategy,
-                                          hurst_mode="trend")
+        size_r = self._calc_position_size(
+            asset_key, candles_1m, strategy, hurst_mode="trend"
+        )
         # Open as trend position
         position = {
             "asset": asset_key,
@@ -1663,7 +2047,9 @@ class TradingLoop:
         }
         self.trend_positions[asset_key] = position
         self.trend_cooldown[asset_key] = 0
-        print(f"📈 {asset_key}: TREND OPEN at {current_price:.6f} | size_r={size_r} | signal=ema_9_21_cross")
+        print(
+            f"📈 {asset_key}: TREND OPEN at {current_price:.6f} | size_r={size_r} | signal=ema_9_21_cross"
+        )
         # Log to trades.jsonl as well (trend trades tracked separately)
         trades_file = self.state_dir / asset_key / "trades.jsonl"
         trades_file.parent.mkdir(parents=True, exist_ok=True)
@@ -1674,6 +2060,7 @@ class TradingLoop:
     def _read_1m_bars(self, asset_key: str) -> list:
         """Read full 1m OHLC from SQLite bar store."""
         from hermes_trading.adaptive import BAR_DB_PATH
+
         if not BAR_DB_PATH.exists():
             return []
         try:
@@ -1684,8 +2071,17 @@ class TradingLoop:
                 (asset_key,),
             ).fetchall()
             conn.close()
-            return [{"timestamp": r[0], "open": r[1], "high": r[2],
-                     "low": r[3], "close": r[4], "volume": r[5]} for r in rows]
+            return [
+                {
+                    "timestamp": r[0],
+                    "open": r[1],
+                    "high": r[2],
+                    "low": r[3],
+                    "close": r[4],
+                    "volume": r[5],
+                }
+                for r in rows
+            ]
         except Exception:
             return []
 
@@ -1700,7 +2096,7 @@ class TradingLoop:
             return []
         candles_1h = []
         for i in range(0, len(bars_1m), 60):
-            group = bars_1m[i:i + 60]
+            group = bars_1m[i : i + 60]
             if len(group) < 60:
                 break  # incomplete final hour
             candle = {
@@ -1720,8 +2116,14 @@ class TradingLoop:
         Returns dict: {'entry': bool, 'direction': str, 'reason': str,
                        'ema9': float, 'ema21': float, 'adx': float}
         """
-        result = {"entry": False, "direction": "none", "reason": "insufficient_data",
-                  "ema9": None, "ema21": None, "adx": None}
+        result = {
+            "entry": False,
+            "direction": "none",
+            "reason": "insufficient_data",
+            "ema9": None,
+            "ema21": None,
+            "adx": None,
+        }
 
         bars_1m = self._read_1m_bars(asset_key)
         candles_1h = self._resample_1h_candles(bars_1m)
@@ -1756,8 +2158,15 @@ class TradingLoop:
         result["adx"] = adx
 
         is_bullish = ema9 > ema21
-        was_bullish = (prev_close9 is not None and prev_close21 is not None
-                       and prev_close9 > prev_close21) if prev_close9 is not None else False
+        was_bullish = (
+            (
+                prev_close9 is not None
+                and prev_close21 is not None
+                and prev_close9 > prev_close21
+            )
+            if prev_close9 is not None
+            else False
+        )
         crossover_long = is_bullish and not was_bullish  # just crossed up
 
         if not is_bullish:
@@ -1770,11 +2179,14 @@ class TradingLoop:
 
         result["entry"] = True
         result["direction"] = "long"
-        result["reason"] = f"EMA 9/21 bullish (9={ema9:.2f} > 21={ema21:.2f}), ADX={adx:.1f} > 25"
+        result["reason"] = (
+            f"EMA 9/21 bullish (9={ema9:.2f} > 21={ema21:.2f}), ADX={adx:.1f} > 25"
+        )
         return result
 
-    def _calc_trend_chandelier(self, asset_key: str, position: dict,
-                                candles_1h: list) -> Optional[float]:
+    def _calc_trend_chandelier(
+        self, asset_key: str, position: dict, candles_1h: list
+    ) -> Optional[float]:
         """Chandelier Exit for trend positions with asset-specific multipliers.
 
         BTC/ETH: 2.5x ATR(14) on 1h candles
@@ -1790,8 +2202,10 @@ class TradingLoop:
 
         # ATR on 1h candles
         atr_pct = self._calc_atr(
-            [{"high": highs[i], "low": lows[i], "close": closes[i]}
-             for i in range(len(closes))],
+            [
+                {"high": highs[i], "low": lows[i], "close": closes[i]}
+                for i in range(len(closes))
+            ],
             period=14,
         )
         if atr_pct is None or atr_pct <= 0:
@@ -1799,7 +2213,9 @@ class TradingLoop:
 
         atr_price = atr_pct * current_price
         multiplier = 2.5 if "SOL" not in asset_key else 4.0  # BTC/ETH=2.5, SOL=4.0
-        high_since_entry = position.get("chandelier_high", position.get("entry_price", current_price))
+        high_since_entry = position.get(
+            "chandelier_high", position.get("entry_price", current_price)
+        )
         chandelier = high_since_entry - (atr_price * multiplier)
         return chandelier
 
@@ -1828,8 +2244,10 @@ class TradingLoop:
 
         latest = five_min_returns[-1]
         mean = sum(five_min_returns) / len(five_min_returns)
-        variance = sum((r - mean) ** 2 for r in five_min_returns) / (len(five_min_returns) - 1)
-        std = variance ** 0.5
+        variance = sum((r - mean) ** 2 for r in five_min_returns) / (
+            len(five_min_returns) - 1
+        )
+        std = variance**0.5
 
         if std <= 0:
             return False, ""
@@ -1838,7 +2256,10 @@ class TradingLoop:
         threshold = -3.0 if ("BTC" in asset_key or "ETH" in asset_key) else -2.0
 
         if zscore < threshold:
-            return True, f"zscore_cooling: {zscore:.2f}σ below {threshold:.0f}σ threshold"
+            return (
+                True,
+                f"zscore_cooling: {zscore:.2f}σ below {threshold:.0f}σ threshold",
+            )
 
         return False, ""
 
@@ -1868,7 +2289,9 @@ class TradingLoop:
             avg_baseline = sum(baseline) / len(baseline)
             if avg_baseline > 0 and (avg_recent / avg_baseline) > 1.30:
                 self.btc_vol_surge_blocked = True
-                self.btc_vol_surge_reason = f"btc_vol_surge: {avg_recent/avg_baseline:.2f}x avg"
+                self.btc_vol_surge_reason = (
+                    f"btc_vol_surge: {avg_recent / avg_baseline:.2f}x avg"
+                )
 
     def _update_oi_snapshots(self):
         """Track OI snapshots hourly for velocity gate.
@@ -1924,10 +2347,14 @@ class TradingLoop:
         low15 = _resample(lows, 15)
         if len(clos15) >= adx_period * 2 + 1:
             try:
-                adx15 = self._calc_adx_from_ohlc(high15, low15, clos15, period=adx_period)
+                adx15 = self._calc_adx_from_ohlc(
+                    high15, low15, clos15, period=adx_period
+                )
                 if adx15 is not None and adx15 > 35:
                     self.adx_danger_blocked[asset_key] = True
-                    print(f"  {asset_key}: 🚨 ADX danger zone — 15m ADX={adx15:.1f} > 35")
+                    print(
+                        f"  {asset_key}: 🚨 ADX danger zone — 15m ADX={adx15:.1f} > 35"
+                    )
             except Exception:
                 pass
 
@@ -1938,16 +2365,22 @@ class TradingLoop:
             low60 = _resample(lows, 60)
             if len(clos60) >= adx_period * 2 + 2:
                 try:
-                    adx60 = self._calc_adx_from_ohlc(high60, low60, clos60, period=adx_period)
+                    adx60 = self._calc_adx_from_ohlc(
+                        high60, low60, clos60, period=adx_period
+                    )
                     ema200 = self._calc_ema_value(clos60, period=200)
                     if adx60 is not None and ema200 is not None and adx60 > 30:
                         if closes[-1] < ema200:
                             self.adx_danger_blocked[asset_key] = True
-                            print(f"  {asset_key}: 🚨 ADX danger zone — 1h ADX={adx60:.1f} > 30, price < EMA200")
+                            print(
+                                f"  {asset_key}: 🚨 ADX danger zone — 1h ADX={adx60:.1f} > 30, price < EMA200"
+                            )
                 except Exception:
                     pass
 
-    def _calc_adx_from_ohlc(self, highs: list, lows: list, closes: list, period: int = 14) -> Optional[float]:
+    def _calc_adx_from_ohlc(
+        self, highs: list, lows: list, closes: list, period: int = 14
+    ) -> Optional[float]:
         """Calculate ADX from pre-resampled OHLC data."""
         if len(closes) < period * 2 + 1:
             return None
@@ -1967,11 +2400,11 @@ class TradingLoop:
             return None
         atr_vals, plus_di, minus_di = [], [], []
         for i in range(period, len(tr_list)):
-            atr = sum(tr_list[i - period:i]) / period
+            atr = sum(tr_list[i - period : i]) / period
             if atr == 0:
                 continue
-            plus_di_val = sum(plus_dm_list[i - period:i]) / period / atr * 100
-            minus_di_val = sum(minus_dm_list[i - period:i]) / period / atr * 100
+            plus_di_val = sum(plus_dm_list[i - period : i]) / period / atr * 100
+            minus_di_val = sum(minus_dm_list[i - period : i]) / period / atr * 100
             atr_vals.append(atr)
             plus_di.append(plus_di_val)
             minus_di.append(minus_di_val)
@@ -2076,6 +2509,7 @@ class TradingLoop:
         if mc_file.exists():
             try:
                 import json
+
                 data = json.loads(mc_file.read_text())
                 self.mc_dd_threshold = data.get("dd_95_pct")
             except Exception:
@@ -2114,7 +2548,10 @@ class TradingLoop:
             return
 
         import json
-        trades = [json.loads(l) for l in trades_file.read_text().strip().split('\n') if l]
+
+        trades = [
+            json.loads(l) for l in trades_file.read_text().strip().split("\n") if l
+        ]
         if len(trades) < 5:
             return  # not enough data for meaningful analysis
 
@@ -2122,7 +2559,9 @@ class TradingLoop:
         opt_file = self.state_dir / asset_key / "optimizer_log.jsonl"
         opt_log = []
         if opt_file.exists():
-            opt_log = [json.loads(l) for l in opt_file.read_text().strip().split('\n') if l]
+            opt_log = [
+                json.loads(l) for l in opt_file.read_text().strip().split("\n") if l
+            ]
 
         cfg = self._load_strategy(asset_key)
         result = run_opt(asset_key, trades, cfg, opt_log)
@@ -2146,22 +2585,28 @@ class TradingLoop:
             wf = result.get("walk_forward", {})
             bm = result.get("benchmarks", {})
             recs = wf.get("recommendations", [])
-            print(f"🧠 {asset_key}: Optimizer {result['status']} "
-                  f"(trigger: {trigger.get('reasons',['unknown'])[0]} | "
-                  f"trades: {result['trades_available']} | "
-                  f"fitness: train={wf.get('train_fitness',{}).get('fitness','?')}/"
-                  f"val={wf.get('validate_fitness',{}).get('fitness','?')})")
+            print(
+                f"🧠 {asset_key}: Optimizer {result['status']} "
+                f"(trigger: {trigger.get('reasons', ['unknown'])[0]} | "
+                f"trades: {result['trades_available']} | "
+                f"fitness: train={wf.get('train_fitness', {}).get('fitness', '?')}/"
+                f"val={wf.get('validate_fitness', {}).get('fitness', '?')})"
+            )
             for r in recs:
                 print(f"   → REC: {r}")
             if bm.get("status") == "analyzed":
                 sharpe_ok = "✅" if bm.get("sharpe_met") else "❌"
                 wr_ok = "✅" if bm.get("win_rate_met") else "❌"
                 dd_ok = "✅" if bm.get("max_dd_met") else "❌"
-                print(f"   Benchmarks: Sharpe {bm.get('sharpe','?')} {sharpe_ok} "
-                      f"| WR {bm.get('win_rate','?'):.0%} {wr_ok} "
-                      f"| DD {bm.get('max_drawdown','?')}% {dd_ok}")
+                print(
+                    f"   Benchmarks: Sharpe {bm.get('sharpe', '?')} {sharpe_ok} "
+                    f"| WR {bm.get('win_rate', '?'):.0%} {wr_ok} "
+                    f"| DD {bm.get('max_drawdown', '?')}% {dd_ok}"
+                )
         else:
-            print(f"  {asset_key}: Optimizer dormant ({result.get('message', 'waiting for triggers')})")
+            print(
+                f"  {asset_key}: Optimizer dormant ({result.get('message', 'waiting for triggers')})"
+            )
 
     def _write_heartbeat(self):
         """Write heartbeat JSON to state."""
@@ -2181,7 +2626,12 @@ class TradingLoop:
             "timestamp": now,
             "mode": self.mode,
             "paper_balance": round(self.paper_balance, 2),
-            "total_pnl_pct": round((self.paper_balance - self.initial_balance) / self.initial_balance * 100, 2),
+            "total_pnl_pct": round(
+                (self.paper_balance - self.initial_balance)
+                / self.initial_balance
+                * 100,
+                2,
+            ),
             "positions": positions_summary,
             "trend_positions": {
                 k: {
@@ -2189,7 +2639,9 @@ class TradingLoop:
                     "entry_time": v["entry_time"],
                     "signal": v["signal"],
                     "strategy": v.get("strategy", "unknown"),
-                } for k, v in self.trend_positions.items() if v is not None
+                }
+                for k, v in self.trend_positions.items()
+                if v is not None
             },
             "btc_context": {
                 "btc_price": self.btc_context.get("btc_price"),
@@ -2211,8 +2663,15 @@ class TradingLoop:
             },
             "optimizer": {
                 "status": self.optimizer_status.get("status", "unknown"),
-                "trades_needed": max(0, 200 - max((self.optimizer_status.get("trades_available", 0) for _ in [1]), default=0)),
-            }
+                "trades_needed": max(
+                    0,
+                    200
+                    - max(
+                        (self.optimizer_status.get("trades_available", 0) for _ in [1]),
+                        default=0,
+                    ),
+                ),
+            },
         }
         hb_file = self.state_dir / "heartbeat.json"
         with open(hb_file, "w") as f:

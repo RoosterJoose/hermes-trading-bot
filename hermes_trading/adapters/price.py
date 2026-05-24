@@ -3,6 +3,7 @@ price.py — Price adapter with CCXT primary, yfinance fallback.
 3 retries with exponential backoff. Schema-validated output.
 Paper mode uses accumulated Brownian noise for realistic simulation.
 """
+
 import asyncio
 import math
 import os
@@ -72,7 +73,9 @@ class PriceAdapter:
             except Exception:
                 pass
 
-    async def fetch(self, asset_key: str, timeframe: str = "1m", limit: int = 100) -> dict:
+    async def fetch(
+        self, asset_key: str, timeframe: str = "1m", limit: int = 100
+    ) -> dict:
         """Fetch price data with 3 retries and exponential backoff.
 
         Args:
@@ -94,7 +97,7 @@ class PriceAdapter:
             except Exception as e:
                 last_error = e
                 if attempt < max_retries:
-                    wait = 2 ** attempt  # 2s, 4s, 8s
+                    wait = 2**attempt  # 2s, 4s, 8s
                     await asyncio.sleep(wait)
 
         self.consecutive_failures += 1
@@ -192,14 +195,16 @@ class PriceAdapter:
                 if not hist.empty and len(hist) > 2:
                     candles = []
                     for idx, row in hist.iterrows():
-                        candles.append({
-                            "timestamp": int(idx.timestamp() * 1000),
-                            "open": float(row["Open"]),
-                            "high": float(row["High"]),
-                            "low": float(row["Low"]),
-                            "close": float(row["Close"]),
-                            "volume": float(row["Volume"]),
-                        })
+                        candles.append(
+                            {
+                                "timestamp": int(idx.timestamp() * 1000),
+                                "open": float(row["Open"]),
+                                "high": float(row["High"]),
+                                "low": float(row["Low"]),
+                                "close": float(row["Close"]),
+                                "volume": float(row["Volume"]),
+                            }
+                        )
                     current_price = candles[-1]["close"]
 
                     if self.mode == "paper":
@@ -220,6 +225,7 @@ class PriceAdapter:
         if cg_id:
             try:
                 import httpx
+
                 async with httpx.AsyncClient(timeout=10) as client:
                     r = await client.get(
                         "https://api.coingecko.com/api/v3/simple/price",
@@ -231,7 +237,9 @@ class PriceAdapter:
                         current_price = price_data.get("usd", 0.0)
                         if current_price > 0:
                             if self.mode == "paper":
-                                current_price = self._apply_noise(asset_key, current_price)
+                                current_price = self._apply_noise(
+                                    asset_key, current_price
+                                )
                             return {
                                 "schema_version": self.SCHEMA_VERSION,
                                 "asset": asset_key,
@@ -257,7 +265,9 @@ class PriceAdapter:
         if asset_key not in self._noise_offset:
             # Initialize noise state
             self._noise_offset[asset_key] = 0.0
-            self._noise_drift[asset_key] = (random.random() - 0.5) * 0.002  # ±0.1% drift
+            self._noise_drift[asset_key] = (
+                random.random() - 0.5
+            ) * 0.002  # ±0.1% drift
             self._last_real_prices[asset_key] = real_price
 
         last_real = self._last_real_prices[asset_key]
@@ -279,7 +289,9 @@ class PriceAdapter:
         self._noise_offset[asset_key] *= 0.98
 
         # Clamp to ±3% so we don't drift absurdly
-        self._noise_offset[asset_key] = max(-0.03, min(0.03, self._noise_offset[asset_key]))
+        self._noise_offset[asset_key] = max(
+            -0.03, min(0.03, self._noise_offset[asset_key])
+        )
 
         noisy_price = real_price * (1.0 + self._noise_offset[asset_key])
         self._last_real_prices[asset_key] = real_price

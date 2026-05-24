@@ -3,6 +3,7 @@
 Hermes Trading Worker — Multi-asset self-improving trading agent.
 Entrypoint: parses config, starts the async trading loop.
 """
+
 import argparse
 import os
 import sys
@@ -40,7 +41,9 @@ def load_strategy(asset_key: str) -> dict:
 def main():
     parser = argparse.ArgumentParser(description="Hermes Trading Worker")
     parser.add_argument("--mode", choices=["paper", "live"], default="paper")
-    parser.add_argument("--asset", help="Override: trade a single asset key (e.g. SOL_USDT)")
+    parser.add_argument(
+        "--asset", help="Override: trade a single asset key (e.g. SOL_USDT)"
+    )
     args = parser.parse_args()
 
     goal = load_goal()
@@ -61,7 +64,9 @@ def main():
     for a in assets:
         asset_key = a["key"]
         strat = load_strategy(asset_key)
-        print(f"   {asset_key}: v{strat['version']} | target +{a['target_return_30d']*100}% | max DD {a['max_drawdown']*100}%")
+        print(
+            f"   {asset_key}: v{strat['version']} | target +{a['target_return_30d'] * 100}% | max DD {a['max_drawdown'] * 100}%"
+        )
 
     # Import and run the loop
     sys.path.insert(0, str(BASE_DIR))
@@ -70,7 +75,15 @@ def main():
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     try:
-        loop.run_until_complete(TradingLoop(assets, STATE_DIR, BASE_DIR, mode=args.mode, initial_balance=goal.get("initial_balance", 10000.0)).run())
+        loop.run_until_complete(
+            TradingLoop(
+                assets,
+                STATE_DIR,
+                BASE_DIR,
+                mode=args.mode,
+                initial_balance=goal.get("initial_balance", 10000.0),
+            ).run()
+        )
     except KeyboardInterrupt:
         print("\n🛑 Shutdown requested.")
     finally:

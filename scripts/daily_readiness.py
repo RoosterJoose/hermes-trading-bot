@@ -77,7 +77,9 @@ def check_bot_health() -> dict:
     try:
         r = subprocess.run(
             ["ps", "aux"],
-            capture_output=True, text=True, timeout=5,
+            capture_output=True,
+            text=True,
+            timeout=5,
         )
         for line in r.stdout.splitlines():
             if "python -m hermes_trading" in line and "grep" not in line:
@@ -108,7 +110,9 @@ def check_bot_health() -> dict:
             lines = log_text.splitlines()
             recent = lines[-100:]
             result["errors_last_100"] = sum(
-                1 for l in recent if any(w in l.lower() for w in ["traceback", "error", "exception"])
+                1
+                for l in recent
+                if any(w in l.lower() for w in ["traceback", "error", "exception"])
             )
         except Exception:
             pass
@@ -127,7 +131,13 @@ def analyze_setups() -> dict:
         "entries": 0,
         "score_buckets": Counter(),
         "safety_blocks": Counter(),
-        "score_distribution": {"0-0.2": 0, "0.2-0.4": 0, "0.4-0.62": 0, "0.62-0.70": 0, "0.70-1.0": 0},
+        "score_distribution": {
+            "0-0.2": 0,
+            "0.2-0.4": 0,
+            "0.4-0.62": 0,
+            "0.62-0.70": 0,
+            "0.70-1.0": 0,
+        },
         "per_asset": {},
         "avg_score_full": 0.0,
         "avg_score_half": 0.0,
@@ -169,7 +179,9 @@ def analyze_setups() -> dict:
                         result["score_distribution"]["0.62-0.70"] += 1
                     else:
                         result["score_distribution"]["0.70-1.0"] += 1
-            elif reason.startswith(("cooldown", "kill_switch", "mc_dd", "portfolio_dd", "correlation")):
+            elif reason.startswith(
+                ("cooldown", "kill_switch", "mc_dd", "portfolio_dd", "correlation")
+            ):
                 result["skipped_setups"] += 1
                 per_asset["safety"] += 1
                 # Bucket safety reasons
@@ -210,7 +222,8 @@ def analyze_setups() -> dict:
 
     # Threshold tuning recommendation
     near_miss_entries = sum(
-        1 for f in find_files(STATE_DIR, "setups_log.jsonl")
+        1
+        for f in find_files(STATE_DIR, "setups_log.jsonl")
         for e in read_jsonl(f)
         if isinstance(e.get("confidence_score"), (int, float))
         and 0.62 <= e["confidence_score"] < 0.65
@@ -278,7 +291,9 @@ def performance_snapshot() -> dict:
             hb = json.loads(hb_path.read_text())
             result["paper_balance"] = hb.get("paper_balance", 0)
             result["total_pnl_pct"] = hb.get("total_pnl_pct", 0.0)
-            result["open_positions"] = sum(1 for v in hb.get("positions", {}).values() if v is not None)
+            result["open_positions"] = sum(
+                1 for v in hb.get("positions", {}).values() if v is not None
+            )
         except Exception:
             pass
 
@@ -376,7 +391,10 @@ def check_reflection_health() -> dict:
             else:
                 result["stale_assets"].append(entry)
 
-            if result["latest_hypothesis_overall"] is None or latest_ts > result["latest_hypothesis_overall"]:
+            if (
+                result["latest_hypothesis_overall"] is None
+                or latest_ts > result["latest_hypothesis_overall"]
+            ):
                 result["latest_hypothesis_overall"] = latest_ts
         except (ValueError, TypeError):
             pass
@@ -401,59 +419,75 @@ def feature_readiness(trade_progress: dict, setups: dict, perf: dict) -> list[di
     # Optimizer
     ready_count = len(trade_progress["optimizer_ready"])
     if ready_count > 0:
-        items.append({
-            "feature": "Optimizer (BayesianTPE + DE)",
-            "status": "✅ READY",
-            "detail": f"{ready_count} asset(s) have 200+ trades",
-        })
+        items.append(
+            {
+                "feature": "Optimizer (BayesianTPE + DE)",
+                "status": "✅ READY",
+                "detail": f"{ready_count} asset(s) have 200+ trades",
+            }
+        )
     elif trade_progress["closest_to_200"]:
         c = trade_progress["closest_to_200"]
-        items.append({
-            "feature": "Optimizer (BayesianTPE + DE)",
-            "status": f"⏳ {c['remaining']} trades away",
-            "detail": f"{c['asset']} has {c['count']}/{OPTIMIZER_THRESHOLD} trades",
-        })
+        items.append(
+            {
+                "feature": "Optimizer (BayesianTPE + DE)",
+                "status": f"⏳ {c['remaining']} trades away",
+                "detail": f"{c['asset']} has {c['count']}/{OPTIMIZER_THRESHOLD} trades",
+            }
+        )
     else:
-        items.append({
-            "feature": "Optimizer (BayesianTPE + DE)",
-            "status": "⏳ Collecting data",
-            "detail": "No assets with trades yet",
-        })
+        items.append(
+            {
+                "feature": "Optimizer (BayesianTPE + DE)",
+                "status": "⏳ Collecting data",
+                "detail": "No assets with trades yet",
+            }
+        )
 
     # Confidence score tuning
     if setups["total_cycles"] >= 50:
-        items.append({
-            "feature": "Confidence Score Threshold Tuning",
-            "status": "📊 Data available",
-            "detail": f"{setups['total_cycles']} cycles recorded. Score distribution: {setups['score_distribution']}",
-        })
+        items.append(
+            {
+                "feature": "Confidence Score Threshold Tuning",
+                "status": "📊 Data available",
+                "detail": f"{setups['total_cycles']} cycles recorded. Score distribution: {setups['score_distribution']}",
+            }
+        )
     else:
-        items.append({
-            "feature": "Confidence Score Threshold Tuning",
-            "status": f"⏳ {setups['total_cycles']}/50 cycles",
-            "detail": "Need more skipped-setup data for meaningful tuning",
-        })
+        items.append(
+            {
+                "feature": "Confidence Score Threshold Tuning",
+                "status": f"⏳ {setups['total_cycles']}/50 cycles",
+                "detail": "Need more skipped-setup data for meaningful tuning",
+            }
+        )
 
     # Trend sleeve readiness
     total_trades = trade_progress.get("total_trades", 0)
     if total_trades >= 20:
-        items.append({
-            "feature": "Trend Sleeve (EMA20/50 4h)",
-            "status": "📊 Baseline available",
-            "detail": f"{total_trades} total trades provide performance baseline for design decisions",
-        })
+        items.append(
+            {
+                "feature": "Trend Sleeve (EMA20/50 4h)",
+                "status": "📊 Baseline available",
+                "detail": f"{total_trades} total trades provide performance baseline for design decisions",
+            }
+        )
     elif total_trades >= 5:
-        items.append({
-            "feature": "Trend Sleeve (EMA20/50 4h)",
-            "status": f"⏳ {total_trades}/20 trades",
-            "detail": "Need ~20 trades for MR performance baseline before adding second strategy",
-        })
+        items.append(
+            {
+                "feature": "Trend Sleeve (EMA20/50 4h)",
+                "status": f"⏳ {total_trades}/20 trades",
+                "detail": "Need ~20 trades for MR performance baseline before adding second strategy",
+            }
+        )
     else:
-        items.append({
-            "feature": "Trend Sleeve (EMA20/50 4h)",
-            "status": "⏳ Waiting for MR data",
-            "detail": f"Only {total_trades} trades so far",
-        })
+        items.append(
+            {
+                "feature": "Trend Sleeve (EMA20/50 4h)",
+                "status": "⏳ Waiting for MR data",
+                "detail": f"Only {total_trades} trades so far",
+            }
+        )
 
     return items
 
@@ -470,7 +504,9 @@ def main():
 
     # ── 1. Bot health ──
     health = check_bot_health()
-    print(f"Bot Status: {health['status']}  (PID: {health['pid'] or 'N/A'}, uptime: {health['uptime'] or 'N/A'})")
+    print(
+        f"Bot Status: {health['status']}  (PID: {health['pid'] or 'N/A'}, uptime: {health['uptime'] or 'N/A'})"
+    )
     if health["errors_last_100"] > 0:
         print(f"  ⚠️  {health['errors_last_100']} errors in last 100 log lines")
     else:
@@ -483,7 +519,9 @@ def main():
     print(f"  Total cycles: {setups['total_cycles']}")
     print(f"  Entries: {setups['entries']}")
     print(f"  Skipped (low confidence): {setups['skipped_setups']}")
-    print(f"  Safety blocks: {dict(setups['safety_blocks']) if setups['safety_blocks'] else '—'}")
+    print(
+        f"  Safety blocks: {dict(setups['safety_blocks']) if setups['safety_blocks'] else '—'}"
+    )
 
     sd = setups["score_distribution"]
     print(f"  Score distribution:")
@@ -502,7 +540,9 @@ def main():
 
     near_miss = setups["near_misses_062_065"]
     if near_miss > 2:
-        print(f"  ⚠️  Recommendation: Consider lowering half-size threshold to 0.60 — {near_miss} near-misses at 0.62-0.65")
+        print(
+            f"  ⚠️  Recommendation: Consider lowering half-size threshold to 0.60 — {near_miss} near-misses at 0.62-0.65"
+        )
     elif near_miss > 0:
         print(f"  ℹ️  {near_miss} near-miss entries at 0.62-0.65 — monitoring")
     else:
@@ -515,7 +555,11 @@ def main():
     print(f"  Total closed trades: {trades['total_trades']}")
     for asset, count in sorted(trades["per_asset"].items()):
         remaining = max(0, OPTIMIZER_THRESHOLD - count)
-        bar = "█" * min(count // 10, 20) + "░" * min(remaining // 10, 20) if remaining > 0 else "█" * 20
+        bar = (
+            "█" * min(count // 10, 20) + "░" * min(remaining // 10, 20)
+            if remaining > 0
+            else "█" * 20
+        )
         print(f"  {asset:12s}: {count:3d} trades  {bar}  ({remaining} to optimizer)")
     print()
 
@@ -530,18 +574,24 @@ def main():
     if perf["per_asset_perf"]:
         print(f"  Per-asset performance:")
         for asset, ap in sorted(perf["per_asset_perf"].items()):
-            print(f"    {asset:12s}: {ap['trades']:3d} trades, WR {ap['win_rate']}%, avg PnL {ap['avg_pnl']:+.2f}%")
+            print(
+                f"    {asset:12s}: {ap['trades']:3d} trades, WR {ap['win_rate']}%, avg PnL {ap['avg_pnl']:+.2f}%"
+            )
 
     # Benchmark targets
     if perf.get("benchmarks"):
-        print(f"  Benchmark targets (vs Sharpe={perf['benchmarks'].get(list(perf['benchmarks'])[0],{}).get('sharpe_target','?')}, DD≤12%, WR≥40%):")
+        print(
+            f"  Benchmark targets (vs Sharpe={perf['benchmarks'].get(list(perf['benchmarks'])[0], {}).get('sharpe_target', '?')}, DD≤12%, WR≥40%):"
+        )
         for asset, bm in sorted(perf["benchmarks"].items()):
             s_ok = "✅" if bm.get("sharpe_met") else "❌"
             w_ok = "✅" if bm.get("win_rate_met") else "❌"
             d_ok = "✅" if bm.get("max_dd_met") else "❌"
-            print(f"    {asset:12s}: Sharpe {bm.get('sharpe','?'):<6} {s_ok} "
-                  f"WR {bm.get('win_rate','?'):.0%} {w_ok} "
-                  f"DD {bm.get('max_dd','?'):<5}% {d_ok}")
+            print(
+                f"    {asset:12s}: Sharpe {bm.get('sharpe', '?'):<6} {s_ok} "
+                f"WR {bm.get('win_rate', '?'):.0%} {w_ok} "
+                f"DD {bm.get('max_dd', '?'):<5}% {d_ok}"
+            )
     print()
 
     # ── 5. Reflection health ──
@@ -551,30 +601,46 @@ def main():
     print(f"  Assets with hypotheses: {reflection['total_assets_with_hypotheses']}")
     for entry in reflection["healthy_assets"]:
         age_str = ago(entry["latest_timestamp"])
-        print(f"  ✅ {entry['asset']:12s}: v{entry['total_hypotheses']} | {entry['latest_action']} | {age_str}")
+        print(
+            f"  ✅ {entry['asset']:12s}: v{entry['total_hypotheses']} | {entry['latest_action']} | {age_str}"
+        )
     for entry in reflection["stale_assets"]:
-        print(f"  ⚠️  {entry['asset']:12s}: v{entry['total_hypotheses']} | {entry['latest_action']} | {entry['age_hours']}h ago — STALE")
+        print(
+            f"  ⚠️  {entry['asset']:12s}: v{entry['total_hypotheses']} | {entry['latest_action']} | {entry['age_hours']}h ago — STALE"
+        )
 
     # ── 5b. Drawdown Autopsy ──
     print()
     print(f"── Drawdown Check ──")
     import sys, importlib
+
     scripts_path = str(Path("/opt/data/hermes-trading/scripts"))
     if scripts_path not in sys.path:
         sys.path.insert(0, scripts_path)
     from drawdown_autopsy import check_triggers, write_autopsy
+
     triggers = check_triggers()
-    if triggers["daily_loss_triggered"] or triggers["weekly_dd_triggered"] or triggers["consecutive_losses_triggered"]:
+    if (
+        triggers["daily_loss_triggered"]
+        or triggers["weekly_dd_triggered"]
+        or triggers["consecutive_losses_triggered"]
+    ):
         print(f"  ⚠️  DRAWDOWN TRIGGERED")
         if triggers["daily_loss_triggered"]:
-            print(f"     Daily loss: {triggers['daily_pnl_pct']:.2f}% (< -1.5% trigger)")
+            print(
+                f"     Daily loss: {triggers['daily_pnl_pct']:.2f}% (< -1.5% trigger)"
+            )
         if triggers["weekly_dd_triggered"]:
-            print(f"     Weekly drawdown: {triggers['weekly_dd_pct']:.2f}% (< -4% trigger)")
+            print(
+                f"     Weekly drawdown: {triggers['weekly_dd_pct']:.2f}% (< -4% trigger)"
+            )
         if triggers["consecutive_losses_triggered"]:
             for a in triggers["triggered_assets"]:
                 print(f"     {a['asset']}: {a['trades_in_streak']} consecutive losses")
     else:
-        print(f"  ✅ No drawdown triggers (daily: {triggers['daily_pnl_pct']:.2f}%, weekly: {triggers['weekly_dd_pct']:.2f}%)")
+        print(
+            f"  ✅ No drawdown triggers (daily: {triggers['daily_pnl_pct']:.2f}%, weekly: {triggers['weekly_dd_pct']:.2f}%)"
+        )
     print()
 
     # ── 6. Feature readiness ──
@@ -587,7 +653,9 @@ def main():
     # ── Summary ──
     print("────────────────────────────────────────────")
     if health["pid"] is None:
-        print("⚠️  ACTION REQUIRED: Bot is not running — start with HERMES_TRADING_MODE=paper")
+        print(
+            "⚠️  ACTION REQUIRED: Bot is not running — start with HERMES_TRADING_MODE=paper"
+        )
     elif trades["optimizer_ready"]:
         print(f"✅ Optimizer ready for {len(trades['optimizer_ready'])} asset(s)")
     else:

@@ -9,6 +9,7 @@ Score formula (equal weighted):
 
 Final = weighted average of the three.
 """
+
 from typing import List, Dict
 import math
 
@@ -44,7 +45,11 @@ def score_trades(trades: List[Dict], goal: Dict) -> Dict:
     # Calculate Sharpe-like metric from trade returns
     returns = [t.get("pnl_pct", 0.0) for t in trades]
     mean_return = sum(returns) / len(returns) if returns else 0.0
-    std_return = math.sqrt(sum((r - mean_return) ** 2 for r in returns) / len(returns)) if len(returns) > 1 else 0.0001
+    std_return = (
+        math.sqrt(sum((r - mean_return) ** 2 for r in returns) / len(returns))
+        if len(returns) > 1
+        else 0.0001
+    )
     sharpe = mean_return / std_return if std_return > 0 else 0.0
 
     # Track max drawdown from trades

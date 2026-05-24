@@ -1,4 +1,5 @@
 """News/sentiment adapter — optional, returns empty without API key."""
+
 import os
 
 
@@ -26,6 +27,7 @@ class NewsAdapter:
 
         try:
             import httpx
+
             symbol = asset_key.split("_")[0]
             async with httpx.AsyncClient(timeout=15) as client:
                 resp = await client.get(

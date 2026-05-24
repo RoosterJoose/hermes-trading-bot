@@ -69,7 +69,7 @@ def compute_correlations(
     for asset, closes in bar_data.items():
         if len(closes) < window + 1:
             return {}
-        recent = closes[-(window + 1):]
+        recent = closes[-(window + 1) :]
         r = []
         for i in range(1, len(recent)):
             if recent[i - 1] > 0:

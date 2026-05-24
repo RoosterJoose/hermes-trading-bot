@@ -135,7 +135,9 @@ def compute_dynamic_rsi_threshold(
     rsi_values = _compute_rsi_series(closes, rsi_period)
 
     if len(rsi_values) < 100:
-        result["reason"] = f"only {len(rsi_values)} RSI values (need 100+ for stable percentile)"
+        result["reason"] = (
+            f"only {len(rsi_values)} RSI values (need 100+ for stable percentile)"
+        )
         return result
 
     # Compute percentile thresholds
@@ -425,7 +427,9 @@ def compute_cusum_regime(
     log_returns = np.diff(np.log(prices))
 
     if len(log_returns) < baseline_window + 50:
-        result["reason"] = f"need {baseline_window + 50} log returns, have {len(log_returns)}"
+        result["reason"] = (
+            f"need {baseline_window + 50} log returns, have {len(log_returns)}"
+        )
         return result
 
     # Split: first baseline_window values establish baseline
@@ -464,15 +468,11 @@ def compute_cusum_regime(
     elif up_breaks > down_breaks:
         result["regime"] = "shifting_up"
         result["block_entry"] = block_on_up_drift
-        result["reason"] = (
-            f"shifting up: {up_breaks}↑ vs {down_breaks}↓ CUSUM breaks"
-        )
+        result["reason"] = f"shifting up: {up_breaks}↑ vs {down_breaks}↓ CUSUM breaks"
     elif down_breaks > 0:
         result["regime"] = "shifting_down"
         result["block_entry"] = False
-        result["reason"] = (
-            f"shifting down: {down_breaks}↓ vs {up_breaks}↑ CUSUM breaks"
-        )
+        result["reason"] = f"shifting down: {down_breaks}↓ vs {up_breaks}↑ CUSUM breaks"
     else:
         result["regime"] = "normal"
         result["block_entry"] = False
@@ -484,6 +484,7 @@ def compute_cusum_regime(
 # ──────────────────────────────────────────────────────────────────────
 # Feature 4: Per-Asset Percentile RSI Threshold (spec-based)
 # ──────────────────────────────────────────────────────────────────────
+
 
 def compute_rsi_percentile_threshold(
     asset_key: str,
@@ -516,29 +517,53 @@ def compute_rsi_percentile_threshold(
 
     closes, bar_count = _read_1m_closes(asset_key)
     if not closes:
-        return {"active": False, "threshold": None, "percentile": percentile,
-                "bars_used": 0, "reason": "bar DB empty or not found"}
+        return {
+            "active": False,
+            "threshold": None,
+            "percentile": percentile,
+            "bars_used": 0,
+            "reason": "bar DB empty or not found",
+        }
 
     if bar_count < min_bars:
-        return {"active": False, "threshold": None, "percentile": percentile,
-                "bars_used": bar_count, "reason": f"need {min_bars} bars, have {bar_count}"}
+        return {
+            "active": False,
+            "threshold": None,
+            "percentile": percentile,
+            "bars_used": bar_count,
+            "reason": f"need {min_bars} bars, have {bar_count}",
+        }
 
     if bar_count < 16:
-        return {"active": False, "threshold": None, "percentile": percentile,
-                "bars_used": bar_count, "reason": "need 16+ bars for RSI(14)"}
+        return {
+            "active": False,
+            "threshold": None,
+            "percentile": percentile,
+            "bars_used": bar_count,
+            "reason": "need 16+ bars for RSI(14)",
+        }
 
     rsi_values = _compute_rsi_series(closes, period=14)
     if len(rsi_values) < 100:
-        return {"active": False, "threshold": None, "percentile": percentile,
-                "bars_used": bar_count, "reason": f"only {len(rsi_values)} RSI values (need 100+)"}
+        return {
+            "active": False,
+            "threshold": None,
+            "percentile": percentile,
+            "bars_used": bar_count,
+            "reason": f"only {len(rsi_values)} RSI values (need 100+)",
+        }
 
     # Data quality check: if >30% of RSI values are at extremes (≥99 or ≤1),
     # the underlying bar data is too flat for meaningful percentiles.
     extreme_ratio = sum(1 for r in rsi_values if r >= 99 or r <= 1) / len(rsi_values)
     if extreme_ratio > 0.30:
-        return {"active": False, "threshold": None, "percentile": percentile,
-                "bars_used": bar_count,
-                "reason": f"flat data: {extreme_ratio:.0%} RSI at extremes (need ≤30%)"}
+        return {
+            "active": False,
+            "threshold": None,
+            "percentile": percentile,
+            "bars_used": bar_count,
+            "reason": f"flat data: {extreme_ratio:.0%} RSI at extremes (need ≤30%)",
+        }
 
     threshold = float(np.percentile(rsi_values, percentile))
     threshold = max(5.0, min(95.0, threshold))
@@ -570,7 +595,12 @@ def check_vol_sanity(asset_key: str, n_bars: int = 60) -> dict:
       vol_ann    — float or None, annualized vol value
       reason     — str, status message
     """
-    result = {"active": False, "sane": True, "vol_ann": None, "reason": "insufficient_data"}
+    result = {
+        "active": False,
+        "sane": True,
+        "vol_ann": None,
+        "reason": "insufficient_data",
+    }
 
     closes, bar_count = _read_1m_closes(asset_key)
     if not closes or len(closes) < 3:

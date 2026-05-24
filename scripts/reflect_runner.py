@@ -10,6 +10,7 @@ Schedule: weekly on Sunday 13:00 UTC.
 The underlying reflect.py fallback engine handles the actual adjustments.
 This script decides WHEN each asset needs its learning tiers triggered.
 """
+
 import json
 import os
 import subprocess
@@ -28,14 +29,22 @@ def load_hypotheses(asset_key: str) -> list[dict]:
     path = STATE_DIR / asset_key / "hypotheses.jsonl"
     if not path.exists():
         return []
-    return [json.loads(line) for line in path.read_text().strip().splitlines() if line.strip()]
+    return [
+        json.loads(line)
+        for line in path.read_text().strip().splitlines()
+        if line.strip()
+    ]
 
 
 def load_trades(asset_key: str) -> list[dict]:
     path = STATE_DIR / asset_key / "trades.jsonl"
     if not path.exists():
         return []
-    return [json.loads(line) for line in path.read_text().strip().splitlines() if line.strip()]
+    return [
+        json.loads(line)
+        for line in path.read_text().strip().splitlines()
+        if line.strip()
+    ]
 
 
 def get_latest_hypothesis_time(hypotheses: list[dict]) -> str:
@@ -124,7 +133,10 @@ def grade_asset(asset_key: str) -> dict:
     # Tier 3: Structural (50 trades total in system)
     total_count = len(trades)
     auto_corr = check_autocorrelation(trades)
-    tier3_ready = total_count >= 50 and auto_corr["action"] in ("regime_shift", "normal")
+    tier3_ready = total_count >= 50 and auto_corr["action"] in (
+        "regime_shift",
+        "normal",
+    )
     tier3_flag = auto_corr["action"] == "regime_shift"
 
     # ── Decision ──
@@ -188,10 +200,21 @@ def run_fallback_reflection(asset_key: str) -> dict:
 
     try:
         result = subprocess.run(
-            [UV_BIN, "run", "python", "-m", "hermes_trading.reflect",
-             "--mode", "fallback", "--asset", asset_key],
+            [
+                UV_BIN,
+                "run",
+                "python",
+                "-m",
+                "hermes_trading.reflect",
+                "--mode",
+                "fallback",
+                "--asset",
+                asset_key,
+            ],
             cwd=str(BASE_DIR),
-            capture_output=True, text=True, timeout=60,
+            capture_output=True,
+            text=True,
+            timeout=60,
         )
         after = sum(1 for _ in open(hyp_path)) if hyp_path.exists() else 0
         return {
@@ -202,23 +225,38 @@ def run_fallback_reflection(asset_key: str) -> dict:
             "hypotheses_after": after,
         }
     except subprocess.TimeoutExpired:
-        return {"returncode": -1, "stdout": "", "stderr": "TIMEOUT",
-                "new_hypothesis": False, "hypotheses_after": before}
+        return {
+            "returncode": -1,
+            "stdout": "",
+            "stderr": "TIMEOUT",
+            "new_hypothesis": False,
+            "hypotheses_after": before,
+        }
     except Exception as e:
-        return {"returncode": -2, "stdout": "", "stderr": str(e),
-                "new_hypothesis": False, "hypotheses_after": before}
+        return {
+            "returncode": -2,
+            "stdout": "",
+            "stderr": str(e),
+            "new_hypothesis": False,
+            "hypotheses_after": before,
+        }
 
 
 def main():
     now = datetime.now(timezone.utc)
     print(f"[{now.strftime('%Y-%m-%d %H:%M UTC')}] 📊 Weekly Reflection")
-    print(f"    Tier 1 (5 trades) — rolling WR watch | Tier 2 (20) — param adjust | Tier 3 (50) — regime check")
+    print(
+        f"    Tier 1 (5 trades) — rolling WR watch | Tier 2 (20) — param adjust | Tier 3 (50) — regime check"
+    )
     print()
 
-    assets = sorted([
-        d.name for d in STATE_DIR.iterdir()
-        if d.is_dir() and (d / "trades.jsonl").exists()
-    ])
+    assets = sorted(
+        [
+            d.name
+            for d in STATE_DIR.iterdir()
+            if d.is_dir() and (d / "trades.jsonl").exists()
+        ]
+    )
 
     if not assets:
         print("No assets found — exiting")
@@ -228,16 +266,33 @@ def main():
     grades = [grade_asset(a) for a in assets]
 
     # Phase 2: Display grades
-    emoji = {"reflect_tier3": "🔴", "reflect_tier2": "⚡", "warn_tier1": "⚠️", "skip": "⏸️"}
+    emoji = {
+        "reflect_tier3": "🔴",
+        "reflect_tier2": "⚡",
+        "warn_tier1": "⚠️",
+        "skip": "⏸️",
+    }
     for g in grades:
-        print(f"  {emoji.get(g['action'], '❓')} {g['asset']:12s}  [{g['action']}] {g['reason']}")
-        if g.get("tier1_flag") and g["action"] not in ("reflect_tier3", "reflect_tier2"):
+        print(
+            f"  {emoji.get(g['action'], '❓')} {g['asset']:12s}  [{g['action']}] {g['reason']}"
+        )
+        if g.get("tier1_flag") and g["action"] not in (
+            "reflect_tier3",
+            "reflect_tier2",
+        ):
             print(f"               ⇢ 5-trade WR={g['tier1_wr']:.0f}% — watching")
-        if g.get("autocorrelation") and g["autocorrelation"]["action"] == "regime_shift":
-            print(f"               ⇢ z-score={g['autocorrelation']['z_score']}, runs={g['autocorrelation']['runs']} vs {g['autocorrelation']['expected_runs']} expected")
+        if (
+            g.get("autocorrelation")
+            and g["autocorrelation"]["action"] == "regime_shift"
+        ):
+            print(
+                f"               ⇢ z-score={g['autocorrelation']['z_score']}, runs={g['autocorrelation']['runs']} vs {g['autocorrelation']['expected_runs']} expected"
+            )
 
     # Phase 3: Run Tier 2 & Tier 3 reflections
-    reflect_assets = [g for g in grades if g["action"] in ("reflect_tier2", "reflect_tier3")]
+    reflect_assets = [
+        g for g in grades if g["action"] in ("reflect_tier2", "reflect_tier3")
+    ]
 
     if reflect_assets:
         print()
@@ -245,7 +300,9 @@ def main():
         for g in reflect_assets:
             r = run_fallback_reflection(g["asset"])
             if r["new_hypothesis"]:
-                print(f"    ✅ {g['asset']}: v{r['hypotheses_after']} hypothesis written (tier {g['tier']})")
+                print(
+                    f"    ✅ {g['asset']}: v{r['hypotheses_after']} hypothesis written (tier {g['tier']})"
+                )
             elif r["returncode"] != 0:
                 print(f"    ❌ {g['asset']}: CRASHED (exit {r['returncode']})")
                 for line in r["stderr"].split("\n")[-3:]:
@@ -259,13 +316,18 @@ def main():
     tier2_count = sum(1 for g in grades if g["action"] == "reflect_tier2")
     tier1_count = sum(1 for g in grades if g["action"] == "warn_tier1")
     skip_count = sum(1 for g in grades if g["action"] == "skip")
-    errors = sum(1 for g in reflect_assets
-                 for r in [run_fallback_reflection(g["asset"])]
-                 if r["returncode"] != 0)
+    errors = sum(
+        1
+        for g in reflect_assets
+        for r in [run_fallback_reflection(g["asset"])]
+        if r["returncode"] != 0
+    )
 
     print()
     print(f"  Portfolio: {len(assets)} assets")
-    print(f"    Tier 3 (regime): {tier3_count}  |  Tier 2 (adjust): {tier2_count}  |  Tier 1 (watch): {tier1_count}  |  Skip: {skip_count}")
+    print(
+        f"    Tier 3 (regime): {tier3_count}  |  Tier 2 (adjust): {tier2_count}  |  Tier 1 (watch): {tier1_count}  |  Skip: {skip_count}"
+    )
     print(f"    Errors: {errors}")
 
     return 0 if errors == 0 else 1

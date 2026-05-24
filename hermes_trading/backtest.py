@@ -106,11 +106,17 @@ def _calc_adx(candles: list[dict], period: int = 14) -> Optional[float]:
     avg_minus_dm = sum(minus_dm) / period
     di_plus = 100 * avg_plus_dm / atr_period if atr_period > 0 else 0
     di_minus = 100 * avg_minus_dm / atr_period if atr_period > 0 else 0
-    dx = abs(di_plus - di_minus) / (di_plus + di_minus) * 100 if (di_plus + di_minus) > 0 else 0
+    dx = (
+        abs(di_plus - di_minus) / (di_plus + di_minus) * 100
+        if (di_plus + di_minus) > 0
+        else 0
+    )
     return dx
 
 
-def _calc_chandelier_exit(candles: list[dict], high_water: float, mult: float) -> Optional[float]:
+def _calc_chandelier_exit(
+    candles: list[dict], high_water: float, mult: float
+) -> Optional[float]:
     """Calculate Chandelier exit level."""
     atr_pct = _calc_atr(candles, 14)
     if atr_pct is None:
@@ -177,7 +183,7 @@ def evaluate_entry(
         cascade_check = evaluator.get("lower_low_cascade", 3)
         lows = [c["low"] for c in candles]
         if cascade_check > 0 and len(lows) >= cascade_check + 1:
-            recent_lows = lows[-(cascade_check + 1):]
+            recent_lows = lows[-(cascade_check + 1) :]
             if all(recent_lows[i] > recent_lows[i + 1] for i in range(cascade_check)):
                 return False, "lower_low_cascade"
         # Candle position
@@ -225,7 +231,11 @@ def manage_exit(
     if not scaled_out and len(candles) >= 22:
         closes = [c["close"] for c in candles]
         ema20 = _calc_ema_value(closes, 20)
-        if ema20 is not None and candles[-2]["close"] < ema20 and current_price >= ema20:
+        if (
+            ema20 is not None
+            and candles[-2]["close"] < ema20
+            and current_price >= ema20
+        ):
             return True, "scale_out_tp1", True
 
     # Chandelier trailing (only after scale-out)
@@ -284,7 +294,11 @@ def compute_metrics(trades: list[dict], initial_equity: float = 10000.0) -> dict
     # Daily returns for Sharpe (approximate — each trade as one period)
     returns = [t["pnl_pct"] / 100 for t in trades]
     if len(returns) >= 2:
-        sharpe = (np.mean(returns) / np.std(returns, ddof=1)) * math.sqrt(365) if np.std(returns, ddof=1) > 0 else 0
+        sharpe = (
+            (np.mean(returns) / np.std(returns, ddof=1)) * math.sqrt(365)
+            if np.std(returns, ddof=1) > 0
+            else 0
+        )
     else:
         sharpe = 0
 
@@ -326,7 +340,7 @@ def format_metrics(m: dict) -> str:
         f"  Sharpe ratio:     {m['sharpe_ratio']:.2f}",
         f"  Best trade:       {m['best_trade_pct']:+.2f}%",
         f"  Worst trade:      {m['worst_trade_pct']:+.2f}%",
-    f"  Final equity:     ${m['final_equity']:.2f}",
+        f"  Final equity:     ${m['final_equity']:.2f}",
         "═" * 50,
     ]
     return "\n".join(lines)
@@ -362,7 +376,12 @@ def run_backtest(asset_key: str, timeframe: str = "1m") -> tuple[list[dict], dic
     table = "bars_1h" if timeframe == "1h" else "bars"
     conn = sqlite3.connect(str(BAR_DB_PATH))
     # Check table exists
-    tables = [r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()]
+    tables = [
+        r[0]
+        for r in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'"
+        ).fetchall()
+    ]
     if table not in tables:
         print(f"  {table} table not found in DB (tables: {', '.join(tables)})")
         conn.close()
@@ -380,14 +399,22 @@ def run_backtest(asset_key: str, timeframe: str = "1m") -> tuple[list[dict], dic
 
     # Convert to candle dicts
     candles = [
-        {"timestamp": r[0], "open": r[1], "high": r[2], "low": r[3],
-         "close": r[4], "volume": r[5]}
+        {
+            "timestamp": r[0],
+            "open": r[1],
+            "high": r[2],
+            "low": r[3],
+            "close": r[4],
+            "volume": r[5],
+        }
         for r in rows
     ]
 
     start_time = datetime.fromtimestamp(candles[0]["timestamp"])
     end_time = datetime.fromtimestamp(candles[-1]["timestamp"])
-    print(f"  {asset_key}: {len(candles)} bars ({start_time:%m/%d %H:%M} → {end_time:%m/%d %H:%M})")
+    print(
+        f"  {asset_key}: {len(candles)} bars ({start_time:%m/%d %H:%M} → {end_time:%m/%d %H:%M})"
+    )
 
     # Run simulation
     position: Optional[dict] = None
@@ -439,58 +466,86 @@ def run_backtest(asset_key: str, timeframe: str = "1m") -> tuple[list[dict], dic
                 # Scale out 50% — mark as partial, don't close fully
                 position["scaled_out"] = True
                 # Record partial close
-                pnl = ((current_price - position["entry_price"]) / position["entry_price"]) * 100
-                trades.append({
-                    "entry_time": position["entry_time"],
-                    "exit_time": candle["timestamp"],
-                    "entry_price": position["entry_price"],
-                    "exit_price": current_price,
-                    "pnl_pct": round(pnl, 2),
-                    "reason": exit_reason,
-                    "partial": True,
-                })
+                pnl = (
+                    (current_price - position["entry_price"]) / position["entry_price"]
+                ) * 100
+                trades.append(
+                    {
+                        "entry_time": position["entry_time"],
+                        "exit_time": candle["timestamp"],
+                        "entry_price": position["entry_price"],
+                        "exit_price": current_price,
+                        "pnl_pct": round(pnl, 2),
+                        "reason": exit_reason,
+                        "partial": True,
+                    }
+                )
             elif should_exit:
-                pnl = ((current_price - position["entry_price"]) / position["entry_price"]) * 100
-                trades.append({
-                    "entry_time": position["entry_time"],
-                    "exit_time": candle["timestamp"],
-                    "entry_price": position["entry_price"],
-                    "exit_price": current_price,
-                    "pnl_pct": round(pnl, 2),
-                    "reason": exit_reason,
-                    "partial": False,
-                })
+                pnl = (
+                    (current_price - position["entry_price"]) / position["entry_price"]
+                ) * 100
+                trades.append(
+                    {
+                        "entry_time": position["entry_time"],
+                        "exit_time": candle["timestamp"],
+                        "entry_price": position["entry_price"],
+                        "exit_price": current_price,
+                        "pnl_pct": round(pnl, 2),
+                        "reason": exit_reason,
+                        "partial": False,
+                    }
+                )
                 position = None
                 cycles_since_trade = 0
 
     # Close any remaining position at last price
     if position is not None:
-        pnl = ((candles[-1]["close"] - position["entry_price"]) / position["entry_price"]) * 100
-        trades.append({
-            "entry_time": position["entry_time"],
-            "exit_time": candles[-1]["timestamp"],
-            "entry_price": position["entry_price"],
-            "exit_price": candles[-1]["close"],
-            "pnl_pct": round(pnl, 2),
-            "reason": "end_of_data",
-            "partial": False,
-        })
+        pnl = (
+            (candles[-1]["close"] - position["entry_price"]) / position["entry_price"]
+        ) * 100
+        trades.append(
+            {
+                "entry_time": position["entry_time"],
+                "exit_time": candles[-1]["timestamp"],
+                "entry_price": position["entry_price"],
+                "exit_price": candles[-1]["close"],
+                "pnl_pct": round(pnl, 2),
+                "reason": "end_of_data",
+                "partial": False,
+            }
+        )
 
     metrics = compute_metrics(trades)
     return trades, metrics
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Backtest trading strategy on bar data")
-    parser.add_argument("assets", nargs="*", default=[], help="Asset keys (e.g. SOL_USDT)")
-    parser.add_argument("--all", action="store_true", help="Backtest all assets in state dir")
-    parser.add_argument("--report", action="store_true", help="Print detailed trade report")
-    parser.add_argument("--timeframe", default="1m", choices=["1m", "1h"],
-                        help="Bar timeframe (default: 1m)")
+    parser = argparse.ArgumentParser(
+        description="Backtest trading strategy on bar data"
+    )
+    parser.add_argument(
+        "assets", nargs="*", default=[], help="Asset keys (e.g. SOL_USDT)"
+    )
+    parser.add_argument(
+        "--all", action="store_true", help="Backtest all assets in state dir"
+    )
+    parser.add_argument(
+        "--report", action="store_true", help="Print detailed trade report"
+    )
+    parser.add_argument(
+        "--timeframe",
+        default="1m",
+        choices=["1m", "1h"],
+        help="Bar timeframe (default: 1m)",
+    )
     args = parser.parse_args()
 
     if args.all:
-        assets = [p.name for p in STATE_DIR.iterdir() if p.is_dir() and (p / "strategy.yaml").exists()]
+        assets = [
+            p.name
+            for p in STATE_DIR.iterdir()
+            if p.is_dir() and (p / "strategy.yaml").exists()
+        ]
     elif args.assets:
         assets = args.assets
     else:
@@ -510,7 +565,9 @@ def main():
                 xt = datetime.fromtimestamp(t["exit_time"]).strftime("%H:%M")
                 pnl = f"{t['pnl_pct']:+.2f}%"
                 part = " (50%)" if t.get("partial") else ""
-                print(f"  {i+1:4d} {et:12s} {xt:12s} {pnl:8s} {t['reason']+part:20s}")
+                print(
+                    f"  {i + 1:4d} {et:12s} {xt:12s} {pnl:8s} {t['reason'] + part:20s}"
+                )
 
         print()
 
