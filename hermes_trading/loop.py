@@ -2697,6 +2697,14 @@ class TradingLoop:
             "monte_carlo": {
                 "dd_95_pct": self.mc_dd_threshold,
             },
+            "max_drawdown": {
+                "highest_dd_pct": round(
+                    self.portfolio_tracker.status().get("highest_dd_pct", 0), 2
+                ),
+                "current_dd_pct": round(
+                    self.portfolio_tracker.status().get("drawdown_pct", 0), 2
+                ),
+            },
             "optimizer": {
                 "status": self.optimizer_status.get("status", "unknown"),
                 "trades_needed": max(

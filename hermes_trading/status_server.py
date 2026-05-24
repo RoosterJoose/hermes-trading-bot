@@ -64,14 +64,20 @@ def _get_trades(state_dir: Path, limit: int = 50) -> list:
 
 
 def _compute_readiness(state_dir: Path, heartbeat: dict) -> dict:
-    """Compute go-live readiness from heartbeat + state data."""
+    """Compute go-live readiness from heartbeat + trade data.
+
+    Uses daily equity-curve Sharpe, true peak-to-trough max drawdown,
+    and multiple gate conditions for a strict readiness assessment.
+    """
     required_days = 30
     min_trades = 50
     max_drawdown_limit = 10.0
     min_sharpe = 0.8
     min_uptime_hours = 24 * 7  # 7 days minimum uptime
     max_stop_loss_ratio = 0.40  # max 40% of closes via stop loss
+    min_closed_trades_for_sharpe = 10
 
+    # ── Paper days ──
     paper_start = heartbeat.get("paper_start_date")
     paper_days = 0
     if paper_start:
@@ -81,74 +87,105 @@ def _compute_readiness(state_dir: Path, heartbeat: dict) -> dict:
         except (ValueError, TypeError):
             pass
 
-    # Uptime: how old is the heartbeat?
+    # ── Uptime from heartbeat age ──
     uptime_seconds = 0
     hb_ts = heartbeat.get("timestamp")
+    stale_heartbeat = True
     if hb_ts:
         try:
             uptime_seconds = (
                 datetime.now(timezone.utc) - datetime.fromisoformat(hb_ts)
             ).total_seconds()
+            stale_heartbeat = uptime_seconds > 300  # >5min stale
         except (ValueError, TypeError):
             pass
 
-    # Collect all trades for metrics
+    # ── Collect all trades ──
     all_trades = _get_trades(state_dir, limit=10000)
     closed_trades = [t for t in all_trades if t.get("exit_reason")]
     total_trades = len(closed_trades)
 
-    # Compute realized Sharpe from net_pnl_pct values
+    # ── Daily equity-curve Sharpe ──
     realized_sharpe = 0.0
-    net_returns = [
-        t.get("net_pnl_pct", 0.0) for t in closed_trades if "net_pnl_pct" in t
-    ]
-    if len(net_returns) >= 5:
-        mean_ret = np.mean(net_returns)
-        std_ret = np.std(net_returns, ddof=1)
-        if std_ret > 0:
-            # Annualize from per-trade returns (assume ~100 trades/day)
-            trades_per_year_est = max(100, len(net_returns)) * 365
-            annualized_sharpe = (mean_ret / std_ret) * np.sqrt(trades_per_year_est)
+    sharpe_insufficient_data = True
+    daily_returns = {}
+    for t in closed_trades:
+        exit_time = t.get("exit_time", "")
+        if not exit_time:
+            continue
+        try:
+            day = exit_time[:10]  # "2026-05-24"
+        except Exception:
+            continue
+        net_pnl = t.get("net_pnl_pct", 0.0)
+        if "net_pnl_pct" in t:
+            daily_returns[day] = daily_returns.get(day, 0.0) + net_pnl
+
+    daily_ret_values = list(daily_returns.values())
+    if len(daily_ret_values) >= 5:
+        mean_daily = np.mean(daily_ret_values)
+        std_daily = np.std(daily_ret_values, ddof=1)
+        if std_daily > 0 and total_trades >= min_closed_trades_for_sharpe:
+            sharpe_insufficient_data = False
+            # Annualize: daily Sharpe * sqrt(365)
+            annualized_sharpe = (mean_daily / std_daily) * np.sqrt(365)
             realized_sharpe = round(annualized_sharpe, 2)
 
-    # Stop-loss exits ratio
+    # ── True max drawdown from portfolio tracker ──
+    max_dd_pct = heartbeat.get("max_drawdown", {}).get("highest_dd_pct", 0.0)
+    current_dd_pct = heartbeat.get("max_drawdown", {}).get("current_dd_pct", 0.0)
+    mc_dd = heartbeat.get("monte_carlo", {}).get("dd_95_pct")
+    dd_limit = abs(mc_dd) if mc_dd else max_drawdown_limit
+    # Use max drawdown (not current total PnL) as the real risk metric
+    dd_ok = max_dd_pct <= dd_limit
+
+    # ── Stop-loss exits ──
     stop_loss_count = sum(
         1 for t in closed_trades if t.get("exit_reason") == "stop_loss"
     )
     stop_loss_ratio = stop_loss_count / total_trades if total_trades > 0 else 0
 
-    # Time exit count
     time_exit_count = sum(
         1 for t in closed_trades if t.get("exit_reason") in ("time_exit",)
     )
 
-    # Extreme loss count (>2x expected stop loss as proxy for data/execution issues)
+    # Extreme loss: account-level net PnL worse than -3% (unusual for 0.5-1% sizing)
     extreme_losses = sum(
         1 for t in closed_trades if t.get("net_pnl_pct", 0) < -3.0
     )
 
-    dd_pct = float(heartbeat.get("total_pnl_pct", 0))
-    mc_dd = heartbeat.get("monte_carlo", {}).get("dd_95_pct")
-    dd_limit = abs(mc_dd) if mc_dd else max_drawdown_limit
-    dd_ok = abs(dd_pct) <= dd_limit if dd_pct < 0 else True
+    # ── Data integrity checks ──
+    data_ok = heartbeat is not None
+    all_assets_have_strategy = True  # checked at startup, assume ok if running
+    no_data_gaps = not stale_heartbeat
 
+    # ── Gate evaluation ──
     days_met = paper_days >= required_days
     trades_met = total_trades >= min_trades
-    sharpe_met = realized_sharpe >= min_sharpe
+    sharpe_met = not sharpe_insufficient_data and realized_sharpe >= min_sharpe
     uptime_met = uptime_seconds >= min_uptime_hours * 3600
     stop_loss_ok = stop_loss_ratio <= max_stop_loss_ratio
+    extremes_ok = extreme_losses == 0
+    data_ok_gate = data_ok and all_assets_have_strategy and no_data_gaps
 
     blockers = []
     if not days_met:
         blockers.append(f"paper_days: {paper_days}/{required_days}")
     if not trades_met:
         blockers.append(f"trade_count: {total_trades}/{min_trades}")
-    if not sharpe_met:
+    if sharpe_insufficient_data:
+        if total_trades < min_closed_trades_for_sharpe:
+            blockers.append(
+                f"sharpe: insufficient trades ({total_trades} closed, need {min_closed_trades_for_sharpe})"
+            )
+        else:
+            blockers.append("sharpe: insufficient daily data (< 5 days with trades)")
+    elif not sharpe_met:
         blockers.append(
-            f"sharpe: {realized_sharpe:.2f} < {min_sharpe} (need more trades or better edge)"
+            f"sharpe: {realized_sharpe:.2f} < {min_sharpe} (daily Sharpe)"
         )
     if not dd_ok:
-        blockers.append(f"drawdown: {abs(dd_pct):.1f}% > {dd_limit:.0f}% limit")
+        blockers.append(f"max_drawdown: {max_dd_pct:.1f}% > {dd_limit:.0f}% limit")
     if not uptime_met:
         uptime_hours = uptime_seconds / 3600
         blockers.append(
@@ -158,6 +195,26 @@ def _compute_readiness(state_dir: Path, heartbeat: dict) -> dict:
         blockers.append(
             f"stop_loss_ratio: {stop_loss_ratio:.0%} > {max_stop_loss_ratio:.0%} max"
         )
+    if not extremes_ok:
+        blockers.append(f"extreme_losses: {extreme_losses} (> 0 not allowed)")
+    if not data_ok_gate:
+        if stale_heartbeat:
+            blockers.append("stale_heartbeat: no recent data (>5min)")
+        if not data_ok:
+            blockers.append("no_heartbeat_data")
+        if not all_assets_have_strategy:
+            blockers.append("missing_strategy_config")
+
+    live_ready = (
+        days_met
+        and trades_met
+        and sharpe_met
+        and dd_ok
+        and uptime_met
+        and stop_loss_ok
+        and extremes_ok
+        and data_ok_gate
+    )
 
     return {
         "paper_days_elapsed": paper_days,
@@ -166,26 +223,29 @@ def _compute_readiness(state_dir: Path, heartbeat: dict) -> dict:
         "total_trades": total_trades,
         "min_trade_count": min_trades,
         "min_trade_count_met": trades_met,
-        "realized_sharpe": realized_sharpe,
+        "realized_sharpe": realized_sharpe if not sharpe_insufficient_data else None,
+        "daily_return_days": len(daily_ret_values),
         "min_sharpe": min_sharpe,
         "sharpe_met": sharpe_met,
-        "max_drawdown_pct": round(abs(dd_pct), 2) if dd_pct < 0 else 0.0,
+        "sharpe_insufficient_data": sharpe_insufficient_data,
+        "max_drawdown_pct": round(max_dd_pct, 2),
+        "current_drawdown_pct": round(current_dd_pct, 2),
         "max_drawdown_limit": dd_limit,
         "max_drawdown_ok": dd_ok,
         "uptime_seconds": int(uptime_seconds),
         "uptime_hours": round(uptime_seconds / 3600, 1),
         "min_uptime_hours": min_uptime_hours,
         "uptime_met": uptime_met,
+        "stale_heartbeat": stale_heartbeat,
         "stop_loss_ratio": round(stop_loss_ratio, 3),
         "stop_loss_ratio_limit": max_stop_loss_ratio,
         "stop_loss_ok": stop_loss_ok,
         "stop_loss_exits": stop_loss_count,
         "time_exits": time_exit_count,
         "extreme_losses": extreme_losses,
-        "data_integrity_ok": heartbeat is not None,
-        "live_ready": (
-            days_met and trades_met and sharpe_met and dd_ok and uptime_met and stop_loss_ok
-        ),
+        "extremes_ok": extremes_ok,
+        "data_integrity_ok": data_ok_gate,
+        "live_ready": live_ready,
         "blockers": blockers,
         "generated_at": datetime.now(timezone.utc).isoformat(),
     }
@@ -309,20 +369,26 @@ async def run_status_server(
 ):
     """Run the status server as an asyncio task.
 
+    Binds to 127.0.0.1 by default. Set HERMES_STATUS_BIND=0.0.0.0
+    environment variable to expose to the network.
+
     Args:
         state_dir: Path to state directory.
         port: HTTP port (default 8099).
         shutdown_event: Optional event to signal graceful shutdown.
     """
+    import os
+
+    bind_host = os.environ.get("HERMES_STATUS_BIND", "127.0.0.1")
     app = create_app(state_dir)
 
     runner = web.AppRunner(app)
     await runner.setup()
-    site = web.TCPSite(runner, "0.0.0.0", port)
+    site = web.TCPSite(runner, bind_host, port)
 
     try:
         await site.start()
-        print(f"🌐 Status server running on http://0.0.0.0:{port}")
+        print(f"🌐 Status server running on http://{bind_host}:{port}")
         if shutdown_event:
             await shutdown_event.wait()
         else:
