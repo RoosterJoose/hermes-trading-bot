@@ -1,0 +1,34 @@
+# Python
+__pycache__/
+*.py[cod]
+*.so
+.venv/
+venv/
+*.egg-info/
+
+# Runtime data
+state/
+data/
+*.db
+*.db-shm
+*.db-wal
+
+# Environment & secrets
+.env
+*.env.local
+.deploy_key
+
+# IDE & OS
+.DS_Store
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Logs
+*.log
+/tmp/
+
+# Auto-generated
+models_dev_cache.json
