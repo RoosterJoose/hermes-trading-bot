@@ -15,8 +15,9 @@ COPY hermes_trading ./hermes_trading
 RUN uv sync
 
 # State directory — Railway persistent volume mounts here
+# Template state created at runtime by the trading loop
 VOLUME /app/state
-COPY state ./state
+RUN mkdir -p /app/state
 
 ENV HERMES_TRADING_MODE=paper
 CMD ["uv", "run", "python", "-m", "hermes_trading"]

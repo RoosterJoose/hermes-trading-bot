@@ -148,25 +148,28 @@ A lightweight aiohttp server runs on `http://0.0.0.0:8099` alongside the trading
 | `GET /positions` | Open positions (MR + trend) |
 | `GET /trades?limit=50` | Recent trades across all assets |
 | `GET /readiness` | Go-live readiness assessment |
-| | `live_ready: true/false` with blocker reasons |
+| | `live_ready: true/false` with detailed blockers |
 
 Example readiness response:
 ```json
 {
-  "paper_days_elapsed": 18,
-  "required_paper_days": 30,
+  "paper_days_elapsed": 18,      "required_paper_days": 30,
   "paper_days_met": false,
-  "total_trades": 45,
-  "min_trade_count": 50,
+  "total_trades": 45,            "min_trade_count": 50,
   "min_trade_count_met": false,
-  "max_drawdown_pct": 3.2,
-  "max_drawdown_limit": 10.0,
+  "realized_sharpe": 0.92,       "min_sharpe": 0.8,
+  "sharpe_met": true,
+  "max_drawdown_pct": 3.2,       "max_drawdown_limit": 10.0,
   "max_drawdown_ok": true,
+  "uptime_hours": 432,           "min_uptime_hours": 168,
+  "uptime_met": true,
+  "stop_loss_ratio": 0.15,       "stop_loss_ratio_limit": 0.40,
+  "stop_loss_ok": true,
+  "stop_loss_exits": 7,
+  "time_exits": 12,
+  "extreme_losses": 0,
   "live_ready": false,
-  "blockers": [
-    "paper_days: 18/30",
-    "trade_count: 45/50"
-  ]
+  "blockers": ["paper_days: 18/30", "trade_count: 45/50"]
 }
 ```
 

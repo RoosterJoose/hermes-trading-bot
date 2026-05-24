@@ -2516,67 +2516,18 @@ class TradingLoop:
         return warnings
 
     def _load_strategy(self, asset_key: str) -> Optional[Dict]:
-        """Load strategy from state file."""
+        """Load strategy from state file. Returns None if missing (fail-closed)."""
         strat_path = self.state_dir / asset_key / "strategy.yaml"
         if not strat_path.exists():
-            default = {
-                "version": "01",
-                "entry": {"indicator": "rsi", "threshold": 30, "direction": "long"},
-                "stop_loss_pct": 2.0,
-                "position_size_r": 0.5,
-                "cooldown_cycles": 30,
-                "btc_gate": {"min_btc_4h_rsi": 25, "min_btc_1h_rsi": 20},
-                "fng_gate": {"min_value": 10},
-                "evaluator": {
-                    "enabled": True,
-                    "lower_low_cascade": 3,
-                    "volume_spike_mult": 1.5,
-                    "min_candle_position": 0.30,
-                    "falling_knife_enabled": True,
-                    "falling_knife_drop_btc": 2.0,
-                    "falling_knife_vol_btc": 2.5,
-                    "falling_knife_drop_alt": 3.5,
-                    "falling_knife_vol_alt": 4.0,
-                },
-                "trend_filter": {
-                    "enabled": True,
-                    "adx_period": 14,
-                    "adx_threshold_strong": 30,
-                    "adx_threshold_moderate": 20,
-                    "ema_period": 20,
-                    "ema_slope_period": 3,
-                    "max_slope_for_mr": 0.001,
-                    "atr_period": 14,
-                },
-                "kill_switches": {
-                    "enabled": True,
-                    "max_open_positions": 3,
-                    "max_daily_loss_pct": 2.5,
-                    "stale_price_cycles": 5,
-                    "max_consecutive_losses": 5,
-                },
-                "position_sizing": {
-                    "enabled": True,
-                    "base_r": 0.5,
-                    "atr_period": 14,
-                    "base_atr_pct": 0.02,
-                    "min_vol_scalar": 0.3,
-                    "max_vol_scalar": 2.0,
-                    "streak_reduction": 0.5,
-                    "max_streak_reduction": 0.25,
-                    "heat_reduction": 0.5,
-                },
-                "chandelier_mult_major": 2.5,
-                "chandelier_mult_alts": 4.0,
-                "atr_sl_mult_major": 2.0,
-                "atr_sl_mult_alt": 3.0,
-                "atr_sl_floor_pct": 1.0,
-                "atr_sl_ceiling_pct": 10.0,
-            }
-            strat_path.parent.mkdir(parents=True, exist_ok=True)
-            with open(strat_path, "w") as f:
-                yaml.dump(default, f, default_flow_style=False)
-            return default
+            if self.mode == "live":
+                print(
+                    f"🔴 FATAL: {asset_key}: strategy.yaml not found — refusing to trade live"
+                )
+                sys.exit(1)
+            print(
+                f"  ⚠️  {asset_key}: strategy.yaml not found — skipping asset (fail-closed)"
+            )
+            return None
         with open(strat_path) as f:
             strategy = yaml.safe_load(f)
         # Run validation

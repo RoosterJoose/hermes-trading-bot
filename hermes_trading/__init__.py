@@ -10,6 +10,7 @@ import sys
 import yaml
 import asyncio
 from pathlib import Path
+from typing import Optional
 
 BASE_DIR = Path(os.path.dirname(os.path.abspath(__file__))).parent
 STATE_DIR = BASE_DIR / "state"
@@ -24,16 +25,15 @@ def load_goal() -> dict:
         return yaml.safe_load(f)
 
 
-def load_strategy(asset_key: str) -> dict:
+def load_strategy(asset_key: str, mode: str = "paper") -> Optional[dict]:
+    """Load strategy config. Returns None if missing (caller must handle fail-closed)."""
     strat_path = STATE_DIR / asset_key / "strategy.yaml"
     if not strat_path.exists():
-        # Return default v01 strategy
-        return {
-            "version": "01",
-            "entry": {"indicator": "rsi", "threshold": 30, "direction": "long"},
-            "stop_loss_pct": 2.0,
-            "position_size_r": 0.5,
-        }
+        if mode == "live":
+            print(f"FATAL: {asset_key}: strategy.yaml not found — refusing to trade live")
+            sys.exit(1)
+        print(f"  ⚠️  {asset_key}: strategy.yaml not found — skipping asset")
+        return None
     with open(strat_path) as f:
         return yaml.safe_load(f)
 
@@ -61,12 +61,24 @@ def main():
         sys.exit(1)
 
     print(f"🎯 Hermes Trading Worker — {args.mode.upper()} mode")
+    valid_assets = []
     for a in assets:
         asset_key = a["key"]
-        strat = load_strategy(asset_key)
+        strat = load_strategy(asset_key, mode=args.mode)
+        if strat is None:
+            print(f"  ❌ {asset_key}: skipped (no config)")
+            continue
+        valid_assets.append(a)
         print(
-            f"   {asset_key}: v{strat['version']} | target +{a['target_return_30d'] * 100}% | max DD {a['max_drawdown'] * 100}%"
+            f"   {asset_key}: v{strat.get('version', '?')} | "
+            f"target +{a['target_return_30d'] * 100}% | "
+            f"max DD {a['max_drawdown'] * 100}%"
         )
+    assets = valid_assets
+
+    if not assets:
+        print("FATAL: No assets with valid strategy config — refusing to start")
+        sys.exit(1)
 
     # Import and run the loop
     sys.path.insert(0, str(BASE_DIR))

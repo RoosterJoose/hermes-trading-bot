@@ -22,6 +22,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
+import numpy as np
+
 from aiohttp import web
 
 DEFAULT_PORT = 8099
@@ -66,6 +68,9 @@ def _compute_readiness(state_dir: Path, heartbeat: dict) -> dict:
     required_days = 30
     min_trades = 50
     max_drawdown_limit = 10.0
+    min_sharpe = 0.8
+    min_uptime_hours = 24 * 7  # 7 days minimum uptime
+    max_stop_loss_ratio = 0.40  # max 40% of closes via stop loss
 
     paper_start = heartbeat.get("paper_start_date")
     paper_days = 0
@@ -76,42 +81,83 @@ def _compute_readiness(state_dir: Path, heartbeat: dict) -> dict:
         except (ValueError, TypeError):
             pass
 
-    # Count trades across all assets
-    total_trades = 0
-    assets_dir = state_dir
-    if assets_dir.exists():
-        for asset_dir in sorted(assets_dir.iterdir()):
-            if not asset_dir.is_dir():
-                continue
-            trades_file = asset_dir / "trades.jsonl"
-            if trades_file.exists():
-                try:
-                    total_trades += len(
-                        [l for l in trades_file.read_text().strip().split("\n") if l.strip()]
-                    )
-                except Exception:
-                    pass
+    # Uptime: how old is the heartbeat?
+    uptime_seconds = 0
+    hb_ts = heartbeat.get("timestamp")
+    if hb_ts:
+        try:
+            uptime_seconds = (
+                datetime.now(timezone.utc) - datetime.fromisoformat(hb_ts)
+            ).total_seconds()
+        except (ValueError, TypeError):
+            pass
+
+    # Collect all trades for metrics
+    all_trades = _get_trades(state_dir, limit=10000)
+    closed_trades = [t for t in all_trades if t.get("exit_reason")]
+    total_trades = len(closed_trades)
+
+    # Compute realized Sharpe from net_pnl_pct values
+    realized_sharpe = 0.0
+    net_returns = [
+        t.get("net_pnl_pct", 0.0) for t in closed_trades if "net_pnl_pct" in t
+    ]
+    if len(net_returns) >= 5:
+        mean_ret = np.mean(net_returns)
+        std_ret = np.std(net_returns, ddof=1)
+        if std_ret > 0:
+            # Annualize from per-trade returns (assume ~100 trades/day)
+            trades_per_year_est = max(100, len(net_returns)) * 365
+            annualized_sharpe = (mean_ret / std_ret) * np.sqrt(trades_per_year_est)
+            realized_sharpe = round(annualized_sharpe, 2)
+
+    # Stop-loss exits ratio
+    stop_loss_count = sum(
+        1 for t in closed_trades if t.get("exit_reason") == "stop_loss"
+    )
+    stop_loss_ratio = stop_loss_count / total_trades if total_trades > 0 else 0
+
+    # Time exit count
+    time_exit_count = sum(
+        1 for t in closed_trades if t.get("exit_reason") in ("time_exit",)
+    )
+
+    # Extreme loss count (>2x expected stop loss as proxy for data/execution issues)
+    extreme_losses = sum(
+        1 for t in closed_trades if t.get("net_pnl_pct", 0) < -3.0
+    )
 
     dd_pct = float(heartbeat.get("total_pnl_pct", 0))
-    # For drawdown, we need max drawdown from portfolio tracker.
-    # Use heartbeat's trust_state or monte_carlo as proxy
     mc_dd = heartbeat.get("monte_carlo", {}).get("dd_95_pct")
     dd_limit = abs(mc_dd) if mc_dd else max_drawdown_limit
-    if dd_pct < 0:
-        dd_ok = abs(dd_pct) <= dd_limit
-    else:
-        dd_ok = True
+    dd_ok = abs(dd_pct) <= dd_limit if dd_pct < 0 else True
 
     days_met = paper_days >= required_days
     trades_met = total_trades >= min_trades
+    sharpe_met = realized_sharpe >= min_sharpe
+    uptime_met = uptime_seconds >= min_uptime_hours * 3600
+    stop_loss_ok = stop_loss_ratio <= max_stop_loss_ratio
 
     blockers = []
     if not days_met:
         blockers.append(f"paper_days: {paper_days}/{required_days}")
     if not trades_met:
         blockers.append(f"trade_count: {total_trades}/{min_trades}")
+    if not sharpe_met:
+        blockers.append(
+            f"sharpe: {realized_sharpe:.2f} < {min_sharpe} (need more trades or better edge)"
+        )
     if not dd_ok:
         blockers.append(f"drawdown: {abs(dd_pct):.1f}% > {dd_limit:.0f}% limit")
+    if not uptime_met:
+        uptime_hours = uptime_seconds / 3600
+        blockers.append(
+            f"uptime: {uptime_hours:.0f}h < {min_uptime_hours}h minimum"
+        )
+    if not stop_loss_ok:
+        blockers.append(
+            f"stop_loss_ratio: {stop_loss_ratio:.0%} > {max_stop_loss_ratio:.0%} max"
+        )
 
     return {
         "paper_days_elapsed": paper_days,
@@ -120,11 +166,26 @@ def _compute_readiness(state_dir: Path, heartbeat: dict) -> dict:
         "total_trades": total_trades,
         "min_trade_count": min_trades,
         "min_trade_count_met": trades_met,
+        "realized_sharpe": realized_sharpe,
+        "min_sharpe": min_sharpe,
+        "sharpe_met": sharpe_met,
         "max_drawdown_pct": round(abs(dd_pct), 2) if dd_pct < 0 else 0.0,
         "max_drawdown_limit": dd_limit,
         "max_drawdown_ok": dd_ok,
+        "uptime_seconds": int(uptime_seconds),
+        "uptime_hours": round(uptime_seconds / 3600, 1),
+        "min_uptime_hours": min_uptime_hours,
+        "uptime_met": uptime_met,
+        "stop_loss_ratio": round(stop_loss_ratio, 3),
+        "stop_loss_ratio_limit": max_stop_loss_ratio,
+        "stop_loss_ok": stop_loss_ok,
+        "stop_loss_exits": stop_loss_count,
+        "time_exits": time_exit_count,
+        "extreme_losses": extreme_losses,
         "data_integrity_ok": heartbeat is not None,
-        "live_ready": days_met and trades_met and dd_ok,
+        "live_ready": (
+            days_met and trades_met and sharpe_met and dd_ok and uptime_met and stop_loss_ok
+        ),
         "blockers": blockers,
         "generated_at": datetime.now(timezone.utc).isoformat(),
     }
