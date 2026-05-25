@@ -16,8 +16,11 @@ state/*.txt
 state/*/trades.jsonl
 state/*/hypotheses.jsonl
 state/*/rejections.jsonl
+state/*/setups_log.jsonl
+state/*/optimizer_log.jsonl
 state/*/history/
 state/*/analytics/
 data/
 backtest_state/
 scripts/__pycache__/
+crash.log

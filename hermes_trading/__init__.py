@@ -38,7 +38,37 @@ def load_strategy(asset_key: str, mode: str = "paper") -> Optional[dict]:
         return yaml.safe_load(f)
 
 
+CRASH_LOG = str(BASE_DIR / "crash.log")
+
+
 def main():
+    # ── Global exception handler: catch anything, log traceback, exit non-zero ──
+    try:
+        _main_impl()
+    except KeyboardInterrupt:
+        print("\n🛑 Shutdown requested.")
+        sys.exit(0)
+    except SystemExit:
+        raise  # Let the sys.exit() calls in main propagate normally
+    except BaseException as e:
+        import traceback
+
+        tb = traceback.format_exc()
+        msg = (
+            f"=== CRASH at {datetime.now(timezone.utc).isoformat()} ===\n"
+            f"Exception: {e}\n"
+            f"Traceback:\n{tb}\n"
+        )
+        print(msg, flush=True)
+        try:
+            with open(CRASH_LOG, "a") as f:
+                f.write(msg)
+        except OSError:
+            pass
+        sys.exit(99)
+
+
+def _main_impl():
     parser = argparse.ArgumentParser(description="Hermes Trading Worker")
     parser.add_argument("--mode", choices=["paper", "live"], default="paper")
     parser.add_argument(

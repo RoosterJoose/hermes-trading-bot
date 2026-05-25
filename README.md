@@ -125,3 +125,56 @@ dashboard_helpers.py     — State aggregation for live dashboard
 6. **Portfolio halt hard latch** — Once -4% breached, blocks entries until UTC day reset (no mid-day whipsaw)
 7. **`write_strategy` hard bounds** — Last-mile clamping: `scale_out_min_R` [0.1, 2.0], `tp2_target_R` [0.5, 5.0], `stop_loss_pct` [0.3, 10.0], chandelier multipliers [1.0, 10.0]/[1.0, 6.0], plus all sub-dict params bounded
 8. **Paper → Live path** — Requires limit/maker order execution layer for tight 0.3R targets
+
+## Operations & Recovery
+
+### Startup / Reboot
+
+There is **no auto-start after host or container reboot**. This is a container without systemd/crontab at the host level. Recovery requires manual intervention:
+
+```bash
+cd /opt/data/hermes-trading
+bash bootstrap.sh
+```
+
+This kills all stale processes, clears PID files, and launches the full stack (watchdog → bot + API + tunnel + ingester).
+
+### Manual Restart (bot only)
+
+```bash
+cd /opt/data/hermes-trading
+bash bootstrap.sh
+```
+
+### Process Hierarchy
+
+```
+PID 1 (tini)
+└── bot_watchdog.py  — Process supervisor, checks every 30s
+    ├── launch_bot.py  — Trading loop (heartbeat every 60s)
+    ├── server.py      — Dashboard API on :8502
+    ├── cloudflared    — HTTPS tunnel (public URL)
+    └── bar_ingester.py— 1m bar collection
+```
+
+All children run as detached processes (`start_new_session=True`) and survive agent session restarts.
+
+### Crash Diagnosis
+
+When the bot crashes:
+1. **Watchdog** detects stale heartbeat and auto-restarts (exponential backoff: 1min → 15min cap)
+2. **crash.log** at `/opt/data/hermes-trading/crash.log` captures the full traceback (if the bot crashed with an unhandled exception)
+3. **Health cron** sends a Telegram alert if heartbeat is > 5 min stale (every 5 min check)
+4. **Watchdog log** at `/opt/data/hermes-trading/watchdog.log` shows restart history
+
+To check crash history:
+```bash
+cat /opt/data/hermes-trading/crash.log    # Last unhandled exception traceback
+grep '🚨' /opt/data/hermes-trading/watchdog.log  # Restart events
+```
+
+### Known Gaps (residual risk)
+
+- **Watchdog is a single point of failure** — if it crashes, nothing auto-restarts it. The code is kept minimal and defensive.
+- **"Alive but doing nothing"** — the heartbeat tracks process liveness, not trading activity. A stuck loop still ticks the heartbeat. Performance monitoring is planned once there's enough live data to tune thresholds.
+- **Reboot requires human** — no host-level auto-start. This is acceptable in the current environment.

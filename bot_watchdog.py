@@ -256,6 +256,8 @@ def main():
                 failures += 1
                 wait = min(backoff * (2 ** (failures - 1)), 900)
                 log.warning(f"🚨 Bot unhealthy (#{failures}): {reason} — restarting in {wait}s")
+                if (PIDS_DIR.parent / "crash.log").exists():
+                    log.warning("  📋 Check crash.log for the last traceback before restart")
                 time.sleep(min(wait, 30))  # Check in 30s chunks
                 start_bot()
                 last_bot_start = time.time()
