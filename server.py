@@ -228,6 +228,11 @@ class Handler(SimpleHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def end_headers(self):
+        # Kill browser caching for all responses (HTML, JS, API)
+        self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
+        super().end_headers()
+
     def _get_tunnel_url(self) -> str:
         """Read current tunnel URL from state file."""
         try:
