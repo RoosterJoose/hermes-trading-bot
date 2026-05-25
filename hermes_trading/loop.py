@@ -155,7 +155,7 @@ class TradingLoop:
         self.trend_1h_ready: Dict[str, bool] = {a["key"]: False for a in assets}
         self.trend_cooldown: Dict[str, int] = {}  # cycles since last trend entry
         self.max_concurrent_total = 3  # max 3-4 total across both sleeves
-        self.trend_universe = {"BTC_USDT", "ETH_USDT", "SOL_USDT"}
+        self.trend_universe = {"BTC_USDT", "ETH_USDT", "SOL_USDT", "XRP_USDT", "BNB_USDT", "DOGE_USDT", "AVAX_USDT"}
 
         # Portfolio-level daily loss hard halt (stops ALL entries)
         self.portfolio_hard_halt_pct = 4.0  # -4% portfolio daily → global halt
@@ -2087,14 +2087,14 @@ class TradingLoop:
                 f"KILL: {cl} consecutive losses (max {max_cl}) — asset paused",
             )
 
-        # Microstructure volume filter: exclude assets with < $30M 24h volume
+        # Microstructure volume filter: exclude assets with < $5M 24h volume
         if self.hl_context.get("available"):
             symbol = asset_key.split("_")[0]
             hl_asset = self.hl_context.get("assets", {}).get(symbol)
             if hl_asset:
                 vol_24h = hl_asset.get("volume_24h", 0)
-                if vol_24h is not None and vol_24h < 30_000_000:
-                    return (False, f"KILL: {symbol} vol ${vol_24h / 1e6:.1f}M < $30M")
+                if vol_24h is not None and vol_24h < 5_000_000:
+                    return (False, f"KILL: {symbol} vol ${vol_24h / 1e6:.1f}M < $5M")
 
         # OI Velocity gate: > 15% OI expansion in ~48h = institutional trend-building
         if len(self.oi_snapshots) > 0:
@@ -2350,10 +2350,10 @@ class TradingLoop:
                 print(f"  {asset_key}: 📊 Trend setup — {entry_signal['reason']}")
             return
 
-        # 4. Cooldown: at least 60 cycles between trend entries
+        # 4. Cooldown: at least 30 cycles between trend entries
         trend_last = self.trend_cooldown.get(asset_key, 999)
-        if trend_last < 60:
-            print(f"  {asset_key}: 📊 Trend cooldown {trend_last}/60")
+        if trend_last < 30:
+            print(f"  {asset_key}: 📊 Trend cooldown {trend_last}/30")
             return
 
         # 5. Cross-sleeve net exposure: don't open trend if MR already has this asset
