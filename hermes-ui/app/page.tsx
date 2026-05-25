@@ -107,15 +107,34 @@ export default function HermesDashboard() {
   const [readinessScore, setReadinessScore] = useState<number>(62);
   const [mockTradesSimulated, setMockTradesSimulated] = useState<number>(0);
   const [livePositions, setLivePositions] = useState<any[]>([]);
+  const [livePaperDays, setLivePaperDays] = useState<number>(0);
+  const [liveClosedTrades, setLiveClosedTrades] = useState<number>(0);
+  const [liveSharpe, setLiveSharpe] = useState<number | null>(null);
+  const [liveStopLossRatio, setLiveStopLossRatio] = useState<number>(0);
+  const [liveMinTradeCount, setLiveMinTradeCount] = useState<number>(100);
 
-  // Simulated metrics tracking based on readiness progression
-  const paperDays = useMemo(() => Math.min(30, 11 + Math.floor((readinessScore - 62) * 0.5)), [readinessScore]);
-  const closedTrades = useMemo(() => Math.min(100, 47 + Math.floor((readinessScore - 62) * 1.4) + mockTradesSimulated), [readinessScore, mockTradesSimulated]);
+  // Use live API values when available, fall back to simulation from readinessScore
+  const paperDays = useMemo(() => {
+    if (livePaperDays > 0 || (readinessScore > 0 && livePaperDays === 0)) {
+      // If API has given us a real value that's > 0, use it
+      // The 0 case could mean bot just started — check if score suggests an established bot
+      return Math.min(30, livePaperDays);
+    }
+    return Math.min(30, 11 + Math.floor((readinessScore - 62) * 0.5));
+  }, [livePaperDays, readinessScore]);
+  const closedTrades = useMemo(() => {
+    if (liveClosedTrades > 0) return liveClosedTrades;
+    return Math.min(100, 47 + Math.floor((readinessScore - 62) * 1.4) + mockTradesSimulated);
+  }, [liveClosedTrades, readinessScore, mockTradesSimulated]);
   const sharpeRatio = useMemo(() => {
+    if (liveSharpe !== null && liveSharpe > 0) return liveSharpe;
     const progression = (readinessScore - 62) / 38;
     return Number((0.72 + progression * 0.12).toFixed(2));
-  }, [readinessScore]);
-  const stopLossRatio = useMemo(() => Math.min(35, 18 + Math.floor((readinessScore - 62) * 0.45)), [readinessScore]);
+  }, [liveSharpe, readinessScore]);
+  const stopLossRatio = useMemo(() => {
+    if (liveStopLossRatio > 0) return liveStopLossRatio;
+    return Math.min(35, 18 + Math.floor((readinessScore - 62) * 0.45));
+  }, [liveStopLossRatio, readinessScore]);
 
   // Blockers calculated dynamically based on metrics
   const blockersList = useMemo(() => {
@@ -278,6 +297,11 @@ export default function HermesDashboard() {
         if (data.paperBalance !== undefined) setPaperBalance(data.paperBalance);
         if (data.totalPnlPct !== undefined) setPnlPct(data.totalPnlPct);
         if (data.readinessScore !== undefined) setReadinessScore(data.readinessScore);
+        if (data.paperDays !== undefined) setLivePaperDays(data.paperDays);
+        if (data.closedTradesReadiness !== undefined) setLiveClosedTrades(data.closedTradesReadiness);
+        if (data.sharpeRatio !== undefined && data.sharpeRatio !== null) setLiveSharpe(data.sharpeRatio);
+        if (data.stopLossRatio !== undefined) setLiveStopLossRatio(data.stopLossRatio);
+        if (data.minTradeCount !== undefined) setLiveMinTradeCount(data.minTradeCount);
         
         // Update activity feed
         if (data.activityEvents && Array.isArray(data.activityEvents)) {

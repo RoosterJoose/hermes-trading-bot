@@ -176,6 +176,9 @@ class TradingLoop:
             self.paper_start_date = datetime.now(timezone.utc).date().isoformat()
             start_date_file.write_text(self.paper_start_date)
 
+        # Replay historical trades into paper balance (survives crashes/restarts)
+        self._replay_historical_trades()
+
         # Trust-state scaling (unified risk score)
         self.trust_multiplier: float = 1.0
         self.trust_label: str = "high"
@@ -2958,6 +2961,40 @@ class TradingLoop:
         else:
             print(
                 f"  {asset_key}: Optimizer dormant ({result.get('message', 'waiting for triggers')})"
+            )
+
+    def _replay_historical_trades(self):
+        """Scan all trade log files and compound PnL into paper_balance.
+        Ensures balance reflects historical trades after crash/restart cycles."""
+        base_dirs = list(self.state_dir.iterdir())
+        total_replayed = 0
+        compound = 1.0
+        for asset_dir in sorted(base_dirs):
+            if not asset_dir.is_dir():
+                continue
+            tf = asset_dir / "trades.jsonl"
+            if not tf.exists():
+                continue
+            for line in tf.read_text().strip().split("\n"):
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    t = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                # Use net_pnl_pct if available, fall back to pnl_pct
+                pnl = t.get("net_pnl_pct")
+                if pnl is None:
+                    pnl = t.get("pnl_pct", 0.0) or 0.0
+                compound *= 1.0 + pnl / 100.0
+                total_replayed += 1
+        self.paper_balance = round(self.initial_balance * compound, 2)
+        if total_replayed > 0:
+            print(
+                f"📊 Replayed {total_replayed} historical trades → "
+                f"balance: ${self.initial_balance:.0f} → ${self.paper_balance:.2f} "
+                f"({(self.paper_balance / self.initial_balance - 1) * 100:+.2f}%)"
             )
 
     def _write_heartbeat(self):
