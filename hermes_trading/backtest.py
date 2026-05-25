@@ -1,595 +1,502 @@
-"""
-backtest.py — Phase 5: Backtesting Harness
-
-Replays 1m bar data from SQLite through the same strategy logic as loop.py.
-Produces performance metrics: Sharpe, max DD, win rate, profit factor.
+"""Replay-mode backtester — feeds historical bars through the same strategy + risk code.
 
 Usage:
-    uv run python -m hermes_trading.backtest SOL_USDT
-    uv run python -m hermes_trading.backtest --all
-    uv run python -m hermes_trading.backtest SOL_USDT --report
+    python -m hermes_trading.backtest ETH_USDT
+    python -m hermes_trading.backtest ETH_USDT --fee 0.00045
 
-Same entry/exit logic as the live trading loop (reimplemented for
-deterministic replay — no async, no adapters, no noise).
+Design:
+    - Reuses TradingLoop._cycle() unchanged — same indicators, risk, entry/exit.
+    - Replaces live adapters with replay adapters that read from bars.db.
+    - Trades are logged to an in-memory results store and summarized at the end.
+    - No exchange I/O, no real-time waits, no side effects.
 """
 
 import argparse
-import math
+import asyncio
+import io
+import json
+import shutil
 import sqlite3
 import sys
+from contextlib import redirect_stdout
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-import numpy as np
-import yaml
-
-BASE_DIR = Path(__file__).parent.parent
-BAR_DB_PATH = BASE_DIR / "data" / "bars.db"
-STATE_DIR = BASE_DIR / "state"
+# ── Replay Adapters ─────────────────────────────────────────────
 
 
-# ── Pure calc functions (identical to loop.py) ──
+class ReplayPriceAdapter:
+    """Feeds historical bars from bars.db in the same shape as PriceAdapter.fetch().
 
-
-def _calc_rsi(closes: list[float], period: int = 14) -> Optional[float]:
-    if len(closes) < period + 1:
-        return None
-    deltas = [closes[i] - closes[i - 1] for i in range(-period, 0)]
-    gains = sum(d for d in deltas if d > 0)
-    losses = sum(-d for d in deltas if d < 0)
-    avg_gain = gains / period
-    avg_loss = losses / period
-    if avg_loss == 0:
-        return 100.0
-    rs = avg_gain / avg_loss
-    return 100.0 - 100.0 / (1.0 + rs)
-
-
-def _calc_ema_value(closes: list[float], period: int = 20) -> Optional[float]:
-    if len(closes) < period:
-        return None
-    multiplier = 2.0 / (period + 1)
-    ema = sum(closes[:period]) / period
-    for price in closes[period:]:
-        ema = (price - ema) * multiplier + ema
-    return ema
-
-
-def _calc_atr(candles: list[dict], period: int = 14) -> Optional[float]:
-    """Calculate ATR as percentage of price."""
-    if len(candles) < period + 1:
-        return None
-    tr_values = []
-    for i in range(-period, 0):
-        high = candles[i]["high"]
-        low = candles[i]["low"]
-        prev_close = candles[i - 1]["close"]
-        tr = max(high - low, abs(high - prev_close), abs(low - prev_close))
-        tr_values.append(tr)
-    atr = sum(tr_values) / period
-    current_price = candles[-1]["close"]
-    return atr / current_price if current_price > 0 else None
-
-
-def _calc_adx(candles: list[dict], period: int = 14) -> Optional[float]:
-    """Calculate ADX value."""
-    if len(candles) < period + 2:
-        return None
-    plus_dm = []
-    minus_dm = []
-    tr_values = []
-    for i in range(-period - 1, 0):
-        high = candles[i]["high"]
-        low = candles[i]["low"]
-        prev_high = candles[i - 1]["high"]
-        prev_low = candles[i - 1]["low"]
-        prev_close = candles[i - 1]["close"]
-        up_move = high - prev_high
-        down_move = prev_low - low
-        if up_move > down_move and up_move > 0:
-            plus_dm.append(up_move)
-        else:
-            plus_dm.append(0.0)
-        if down_move > up_move and down_move > 0:
-            minus_dm.append(down_move)
-        else:
-            minus_dm.append(0.0)
-        tr = max(high - low, abs(high - prev_close), abs(low - prev_close))
-        tr_values.append(tr)
-    if not tr_values or sum(tr_values) == 0:
-        return None
-    atr_period = sum(tr_values) / period
-    if atr_period <= 0:
-        return None
-    avg_plus_dm = sum(plus_dm) / period
-    avg_minus_dm = sum(minus_dm) / period
-    di_plus = 100 * avg_plus_dm / atr_period if atr_period > 0 else 0
-    di_minus = 100 * avg_minus_dm / atr_period if atr_period > 0 else 0
-    dx = (
-        abs(di_plus - di_minus) / (di_plus + di_minus) * 100
-        if (di_plus + di_minus) > 0
-        else 0
-    )
-    return dx
-
-
-def _calc_chandelier_exit(
-    candles: list[dict], high_water: float, mult: float
-) -> Optional[float]:
-    """Calculate Chandelier exit level."""
-    atr_pct = _calc_atr(candles, 14)
-    if atr_pct is None:
-        return None
-    if len(candles) == 0:
-        return None
-    current_price = candles[-1]["close"]
-    return high_water - atr_pct * mult * current_price
-
-
-# ── Strategy evaluation (matches _cycle logic) ──
-
-
-def evaluate_entry(
-    candles: list[dict],
-    strategy: dict,
-    btc_1h_rsi: Optional[float] = None,
-    btc_4h_rsi: Optional[float] = None,
-) -> tuple[bool, str]:
-    """Evaluate whether to enter a position on this bar.
-
-    Returns (should_enter: bool, reason: str).
+    Internal index advances on each fetch() call so each bar is seen exactly once
+    as the "current" bar, with prior bars as history.
     """
-    closes = [c["close"] for c in candles]
-    if len(candles) < 20:
-        return False, "insufficient_candles"
 
-    rsi = _calc_rsi(closes)
-    if rsi is None:
-        return False, "no_rsi"
+    SCHEMA_VERSION = "replay-v1"
 
-    entry = strategy.get("entry", {})
-    threshold = entry.get("threshold", 30)
+    def __init__(self, asset_key: str, bars: list[dict]):
+        self.asset_key = asset_key
+        self.bars = bars
+        self.idx = 0  # current bar index — advances on each fetch
+        self.consecutive_failures = 0  # matches live PriceAdapter interface
 
-    # BTC gate
-    btc_gate = strategy.get("btc_gate", {})
-    btc_4h_min = btc_gate.get("min_btc_4h_rsi", 25)
-    btc_1h_min = btc_gate.get("min_btc_1h_rsi", 20)
-    if btc_4h_rsi is not None and btc_4h_rsi < btc_4h_min:
-        return False, "btc_4h_gate"
-    if btc_1h_rsi is not None and btc_1h_rsi < btc_1h_min:
-        return False, "btc_1h_gate"
+    async def fetch(
+        self, asset_key: str, timeframe: str = "1m", limit: int = 100
+    ) -> dict:
+        """Return dict matching PriceAdapter.fetch() output shape.
 
-    # FnG gate (skip in backtest — no historical FnG data)
-    fng_gate = strategy.get("fng_gate", {})
-    if fng_gate.get("min_value", 10) > 0:
-        pass  # Cannot verify historically — allow
+        Returns { candles, current_price, source }.
+        Advances the internal index by one bar.
+        """
+        if self.idx >= len(self.bars):
+            return {
+                "schema_version": self.SCHEMA_VERSION,
+                "asset": asset_key,
+                "current_price": 0.0,
+                "candles": [],
+                "source": "replay",
+                "error": "no more bars",
+            }
 
-    # RSI signal
-    if rsi >= threshold:
-        return False, f"rsi_{rsi:.1f}_ge_{threshold}"
+        current_idx = self.idx
+        self.idx += 1
 
-    # ADX trend filter
-    trend = strategy.get("trend_filter", {})
-    if trend.get("enabled", True):
-        adx = _calc_adx(candles, trend.get("adx_period", 14))
-        if adx is not None and adx >= trend.get("adx_threshold_strong", 30):
-            return False, f"adx_{adx:.0f}_strong_trend"
+        # Build candle history up to current bar
+        window = self.bars[: current_idx + 1]
+        # Convert from DB row format to candle dict format
+        candles = [
+            {
+                "timestamp": int(b["timestamp"]) * 1000,  # ms for compatibility
+                "open": float(b["open"]),
+                "high": float(b["high"]),
+                "low": float(b["low"]),
+                "close": float(b["close"]),
+                "volume": float(b["volume"]),
+            }
+            for b in window
+        ]
 
-    # Entry evaluator checks (simplified — no volume panic in backtest)
-    evaluator = strategy.get("evaluator", {})
-    if evaluator.get("enabled", True):
-        # Lower low cascade
-        cascade_check = evaluator.get("lower_low_cascade", 3)
-        lows = [c["low"] for c in candles]
-        if cascade_check > 0 and len(lows) >= cascade_check + 1:
-            recent_lows = lows[-(cascade_check + 1) :]
-            if all(recent_lows[i] > recent_lows[i + 1] for i in range(cascade_check)):
-                return False, "lower_low_cascade"
-        # Candle position
-        pos_check = evaluator.get("min_candle_position", 0.30)
-        if len(candles) >= 1:
-            ch = candles[-1]["high"]
-            cl = candles[-1]["low"]
-            cr = ch - cl
-            if cr > 0:
-                pos = (candles[-1]["close"] - cl) / cr
-                if pos < pos_check:
-                    return False, "low_candle_position"
+        current_bar = self.bars[current_idx]
 
-    return True, "entry_signal"
-
-
-def manage_exit(
-    entry_price: float,
-    current_price: float,
-    candles: list[dict],
-    strategy: dict,
-    chandelier_high: float,
-    scaled_out: bool,
-) -> tuple[bool, str, bool]:
-    """Check exit conditions for an open position.
-
-    Returns (should_exit: bool, reason: str, is_partial: bool).
-    """
-    pnl_pct = ((current_price - entry_price) / entry_price) * 100
-
-    # Stop loss
-    stop_loss_pct = strategy.get("stop_loss_pct", 3.0)
-    atr_pct = _calc_atr(candles, 14)
-    if atr_pct is not None and atr_pct > 0:
-        sl_mult = strategy.get("atr_sl_mult_alt", 3.0)
-        atr_sl = atr_pct * sl_mult * 100
-        sl_floor = strategy.get("atr_sl_floor_pct", 1.0)
-        sl_ceiling = strategy.get("atr_sl_ceiling_pct", 10.0)
-        stop_loss_pct = min(max(atr_sl, sl_floor), sl_ceiling)
-
-    if pnl_pct < -stop_loss_pct:
-        return True, "stop_loss", False
-
-    # Scale-out TP1 (50% at EMA reversion)
-    if not scaled_out and len(candles) >= 22:
-        closes = [c["close"] for c in candles]
-        ema20 = _calc_ema_value(closes, 20)
-        if (
-            ema20 is not None
-            and candles[-2]["close"] < ema20
-            and current_price >= ema20
-        ):
-            return True, "scale_out_tp1", True
-
-    # Chandelier trailing (only after scale-out)
-    if scaled_out:
-        ch_mult = strategy.get("chandelier_mult_alts", 4.0)
-        chandelier = _calc_chandelier_exit(candles, chandelier_high, ch_mult)
-        if chandelier is not None and current_price < chandelier:
-            return True, "chandelier_exit", False
-
-    return False, "", False
-
-
-# ── Metrics ──
-
-
-def compute_metrics(trades: list[dict], initial_equity: float = 10000.0) -> dict:
-    """Compute performance metrics from a list of closed trades."""
-    if not trades:
         return {
-            "total_trades": 0,
-            "win_rate": 0,
-            "profit_factor": 0,
-            "total_pnl_pct": 0,
-            "avg_r_multiple": 0,
-            "max_drawdown_pct": 0,
-            "sharpe_ratio": 0,
-            "final_equity": initial_equity,
-            "time_range": "N/A",
+            "schema_version": self.SCHEMA_VERSION,
+            "asset": asset_key,
+            "current_price": float(current_bar["close"]),
+            "candles": candles,
+            "source": "replay",
+            "replay_bar_idx": current_idx,
         }
 
-    wins = [t for t in trades if t.get("pnl_pct", 0) > 0]
-    losses = [t for t in trades if t.get("pnl_pct", 0) <= 0]
-    total_pnl = sum(t["pnl_pct"] for t in trades)
-    win_rate = len(wins) / len(trades) * 100 if trades else 0
+    @property
+    def current_bar_idx(self) -> int:
+        return self.idx - 1
 
-    gross_profit = sum(t["pnl_pct"] for t in wins)
-    gross_loss = abs(sum(t["pnl_pct"] for t in losses))
-    profit_factor = gross_profit / gross_loss if gross_loss > 0 else float("inf")
+    @property
+    def progress(self) -> float:
+        return self.idx / len(self.bars) if self.bars else 0.0
 
-    # Simulate equity curve for max DD and Sharpe
-    equity = initial_equity
-    equity_curve = [equity]
-    for t in trades:
-        equity *= 1 + t["pnl_pct"] / 100
-        equity_curve.append(equity)
+    async def _close_exchanges(self):
+        pass  # no-op
 
-    peak = initial_equity
-    max_dd = 0
-    for eq in equity_curve:
-        if eq > peak:
-            peak = eq
-        dd = (peak - eq) / peak * 100
-        if dd > max_dd:
-            max_dd = dd
 
-    # Daily returns for Sharpe (approximate — each trade as one period)
-    returns = [t["pnl_pct"] / 100 for t in trades]
-    if len(returns) >= 2:
-        sharpe = (
-            (np.mean(returns) / np.std(returns, ddof=1)) * math.sqrt(365)
-            if np.std(returns, ddof=1) > 0
-            else 0
-        )
-    else:
-        sharpe = 0
+class StubAdapter:
+    """Returns empty/neutral data matching the expected adapter schema.
 
-    avg_r = total_pnl / len(trades) if trades else 0
+    Schema is validated by hermes_trading.schema.validate_adapter_output(),
+    so stubs must return the right field structure even if empty.
+    """
 
-    # Time range
-    times = [t["entry_time"] for t in trades] + [t["exit_time"] for t in trades]
-    time_range = f"{datetime.fromtimestamp(min(times)).strftime('%m/%d %H:%M')} → {datetime.fromtimestamp(max(times)).strftime('%m/%d %H:%M')}"
+    SCHEMA_VERSION = "stub-v1"
 
-    return {
-        "total_trades": len(trades),
-        "wins": len(wins),
-        "losses": len(losses),
-        "win_rate": round(win_rate, 1),
-        "profit_factor": round(profit_factor, 2),
-        "total_pnl_pct": round(total_pnl, 2),
-        "avg_r_multiple": round(avg_r, 2),
-        "max_drawdown_pct": round(max_dd, 2),
-        "sharpe_ratio": round(sharpe, 2),
-        "final_equity": round(equity, 2),
-        "best_trade_pct": round(max(t["pnl_pct"] for t in trades), 2) if trades else 0,
-        "worst_trade_pct": round(min(t["pnl_pct"] for t in trades), 2) if trades else 0,
-        "time_range": time_range,
+    def __init__(self, adapter_type: str = "onchain"):
+        """
+        Args:
+            adapter_type: one of 'onchain', 'news', 'macro', 'price'
+        """
+        self.adapter_type = adapter_type
+
+    async def fetch(self, asset_key: str = "", *args, **kwargs) -> dict:
+        if self.adapter_type == "onchain":
+            return {
+                "schema_version": self.SCHEMA_VERSION,
+                "asset": asset_key,
+                "available": False,
+                "metrics": {},
+            }
+        elif self.adapter_type == "news":
+            return {
+                "schema_version": self.SCHEMA_VERSION,
+                "asset": asset_key,
+                "available": False,
+                "articles": [],
+            }
+        elif self.adapter_type == "macro":
+            return {
+                "schema_version": self.SCHEMA_VERSION,
+                "asset": asset_key,
+                "available": False,
+                "indicators": {},
+            }
+        else:
+            return {
+                "schema_version": self.SCHEMA_VERSION,
+                "asset": asset_key or "unknown",
+                "current_price": 0.0,
+                "candles": [],
+            }
+
+    async def _close_exchanges(self):
+        pass
+
+
+# ── Bar Loader ──────────────────────────────────────────────────
+
+
+def load_bars(asset_key: str, db_path: Path, limit: Optional[int] = None) -> list[dict]:
+    """Load 1m bars from bars.db for one asset, in chronological order."""
+    if not db_path.exists():
+        print(f"❌ bars.db not found at {db_path}")
+        return []
+
+    db = sqlite3.connect(str(db_path))
+    db.row_factory = sqlite3.Row  # dict-like rows
+    query = "SELECT * FROM bars WHERE asset = ? ORDER BY timestamp ASC"
+    params = [asset_key]
+    if limit:
+        query += " LIMIT ?"
+        params.append(limit)
+    rows = db.execute(query, params).fetchall()
+    db.close()
+
+    if not rows:
+        print(f"❌ No bars for {asset_key} in {db_path}")
+        return []
+
+    bars = [dict(r) for r in rows]
+    print(f"📂 Loaded {len(bars)} bars for {asset_key}")
+    return bars
+
+
+# ── Backtest Result Collector ───────────────────────────────────
+
+
+class BacktestResult:
+    """Collects trades and per-bar state during a replay run."""
+
+    def __init__(self):
+        self.trades: list[dict] = []
+        self.equity_curve: list[dict] = []
+        self.start_balance: float = 0.0
+        self.end_balance: float = 0.0
+        self.n_trades: int = 0
+        self.n_wins: int = 0
+        self.n_losses: int = 0
+        self.max_drawdown_pct: float = 0.0
+        self.total_fees: float = 0.0
+
+    def add_trade(self, trade: dict):
+        self.trades.append(trade)
+        self.n_trades += 1
+        if trade.get("net_pnl_dollars", 0) > 0:
+            self.n_wins += 1
+        elif trade.get("net_pnl_dollars", 0) < 0:
+            self.n_losses += 1
+        self.total_fees += trade.get("fee_dollars", 0)
+
+    def add_equity_point(self, timestamp: int, balance: float):
+        self.equity_curve.append({"ts": timestamp, "balance": round(balance, 2)})
+
+    def finalize(self):
+        self.end_balance = self.equity_curve[-1]["balance"] if self.equity_curve else 0
+        self.start_balance = self.equity_curve[0]["balance"] if self.equity_curve else 0
+
+        # Compute max drawdown from equity curve
+        peak = self.start_balance
+        for pt in self.equity_curve:
+            if pt["balance"] > peak:
+                peak = pt["balance"]
+            dd = (peak - pt["balance"]) / peak * 100 if peak > 0 else 0
+            if dd > self.max_drawdown_pct:
+                self.max_drawdown_pct = dd
+
+    def summary(self) -> dict:
+        self.finalize()
+        total_pnl = self.end_balance - self.start_balance
+        total_pnl_pct = (total_pnl / self.start_balance * 100) if self.start_balance > 0 else 0.0
+        win_rate = (self.n_wins / self.n_trades * 100) if self.n_trades > 0 else 0.0
+
+        # Simple Sharpe (daily risk-free = 0, using per-trade returns)
+        returns = [t.get("net_pnl_dollars", 0) / max(t.get("entry_value", 1), 1) for t in self.trades]
+        avg_ret = sum(returns) / len(returns) if returns else 0
+        std_ret = (sum((r - avg_ret) ** 2 for r in returns) / len(returns)) ** 0.5 if returns else 1
+        sharpe = (avg_ret / std_ret) * (252 * 1440) ** 0.5 if std_ret > 0 else 0.0  # annualized for 1m bars
+
+        return {
+            "start_balance": round(self.start_balance, 2),
+            "end_balance": round(self.end_balance, 2),
+            "total_pnl": round(total_pnl, 2),
+            "total_pnl_pct": round(total_pnl_pct, 2),
+            "n_trades": self.n_trades,
+            "win_rate_pct": round(win_rate, 1),
+            "max_drawdown_pct": round(self.max_drawdown_pct, 2),
+            "sharpe_annualized": round(sharpe, 2),
+            "total_fees": round(self.total_fees, 4),
+            "n_wins": self.n_wins,
+            "n_losses": self.n_losses,
+        }
+
+    def print_summary(self):
+        s = self.summary()
+        print("\n" + "=" * 50)
+        print("BACKTEST RESULTS")
+        print("=" * 50)
+        print(f"  Start balance:    ${s['start_balance']:>8.2f}")
+        print(f"  End balance:      ${s['end_balance']:>8.2f}")
+        print(f"  Total PnL:        ${s['total_pnl']:>+8.2f} ({s['total_pnl_pct']:+.2f}%)")
+        print(f"  Trades:           {s['n_trades']}")
+        print(f"  Win rate:         {s['win_rate_pct']:.1f}% ({s['n_wins']}W / {s['n_losses']}L)")
+        print(f"  Max drawdown:     {s['max_drawdown_pct']:.2f}%")
+        print(f"  Sharpe (ann.):    {s['sharpe_annualized']:.2f}")
+        print(f"  Total fees:       ${s['total_fees']:.4f}")
+        print("=" * 50)
+
+
+# ── Main Replay Driver ──────────────────────────────────────────
+
+
+async def run_backtest(
+    asset_key: str = "ETH_USDT",
+    start_balance: float = 1000.0,
+    bars_db: str = "data/bars.db",
+    fee_rate: float = 0.00025,  # Hyperliquid taker
+) -> BacktestResult:
+    """Run replay-mode backtest for one asset.
+
+    Loads historical bars, feeds them through the same TradingLoop._cycle()
+    code path used in paper/live, collects trades, and returns a summary.
+    """
+    from hermes_trading.loop import TradingLoop
+
+    # Resolve paths
+    base_dir = Path.cwd()
+    db_path = Path(bars_db)
+    if not db_path.is_absolute():
+        db_path = base_dir / db_path
+
+    # Load bars
+    bars = load_bars(asset_key, db_path)
+    if not bars:
+        print("No data to backtest.")
+        return BacktestResult()
+
+    # Build a minimal goal/config for the asset
+    goal = {
+        "key": asset_key,
+        "name": asset_key.replace("_", "/"),
+        "asset_type": "crypto",
+        "timeframe": "1m",
     }
 
-
-def format_metrics(m: dict) -> str:
-    """Format metrics as a readable report."""
-    lines = [
-        "═" * 50,
-        "  BACKTEST RESULTS",
-        "═" * 50,
-        f"  Total trades:     {m['total_trades']} ({m['wins']}W / {m['losses']}L)",
-        f"  Win rate:         {m['win_rate']}%",
-        f"  Profit factor:    {m['profit_factor']}",
-        f"  Total PnL:        {m['total_pnl_pct']:+.2f}%",
-        f"  Avg R-multiple:   {m['avg_r_multiple']:+.2f}R",
-        f"  Max drawdown:     {m['max_drawdown_pct']:.2f}%",
-        f"  Sharpe ratio:     {m['sharpe_ratio']:.2f}",
-        f"  Best trade:       {m['best_trade_pct']:+.2f}%",
-        f"  Worst trade:      {m['worst_trade_pct']:+.2f}%",
-        f"  Final equity:     ${m['final_equity']:.2f}",
-        "═" * 50,
-    ]
-    return "\n".join(lines)
-
-
-# ── Main runner ──
-
-
-def run_backtest(asset_key: str, timeframe: str = "1m") -> tuple[list[dict], dict]:
-    """Run backtest for a single asset using bar data from SQLite.
-
-    Args:
-        asset_key: e.g. 'SOL_USDT' or 'XRP_USDT'
-        timeframe: '1m' or '1h'
-
-    Returns:
-        (trades: list[dict], metrics: dict)
-    """
-    # Load strategy
-    strategy_path = STATE_DIR / asset_key / "strategy.yaml"
-    if not strategy_path.exists():
-        print(f"  Strategy not found: {strategy_path}")
-        return [], compute_metrics([])
-
-    with open(strategy_path) as f:
-        strategy = yaml.safe_load(f)
-
-    # Load bars from SQLite (1m or 1h)
-    if not BAR_DB_PATH.exists():
-        print(f"  Bar DB not found: {BAR_DB_PATH}")
-        return [], compute_metrics([])
-
-    table = "bars_1h" if timeframe == "1h" else "bars"
-    conn = sqlite3.connect(str(BAR_DB_PATH))
-    # Check table exists
-    tables = [
-        r[0]
-        for r in conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='table'"
-        ).fetchall()
-    ]
-    if table not in tables:
-        print(f"  {table} table not found in DB (tables: {', '.join(tables)})")
-        conn.close()
-        return [], compute_metrics([])
-    rows = conn.execute(
-        f"SELECT timestamp, open, high, low, close, volume FROM {table} "
-        "WHERE asset = ? ORDER BY timestamp ASC",
-        (asset_key,),
-    ).fetchall()
-    conn.close()
-
-    if len(rows) < 30:
-        print(f"  {asset_key}: only {len(rows)} bars (need 30+ for backtest)")
-        return [], compute_metrics([])
-
-    # Convert to candle dicts
-    candles = [
-        {
-            "timestamp": r[0],
-            "open": r[1],
-            "high": r[2],
-            "low": r[3],
-            "close": r[4],
-            "volume": r[5],
-        }
-        for r in rows
-    ]
-
-    start_time = datetime.fromtimestamp(candles[0]["timestamp"])
-    end_time = datetime.fromtimestamp(candles[-1]["timestamp"])
-    print(
-        f"  {asset_key}: {len(candles)} bars ({start_time:%m/%d %H:%M} → {end_time:%m/%d %H:%M})"
+    # Instantiate TradingLoop in backtest mode
+    assets = [goal]
+    state_dir = base_dir / "backtest_state"
+    state_dir.mkdir(parents=True, exist_ok=True)
+    
+    loop = TradingLoop(
+        assets=assets,
+        state_dir=state_dir,
+        base_dir=base_dir,
+        mode="paper",
+        initial_balance=start_balance,
+        replay_mode=True,
     )
 
-    # Run simulation
-    position: Optional[dict] = None
-    trades: list[dict] = []
-    cooldown_cycles = strategy.get("cooldown_cycles", 30)
-    cycles_since_trade = 999
+    # Override paper balance tracking for clean start
+    loop.paper_balance = start_balance
+    loop.initial_balance = start_balance
 
-    # Iterate candles in order
-    for i, candle in enumerate(candles):
-        current_price = candle["close"]
-        # Build lookback window (all candles up to current)
-        lookback = candles[: i + 1]
+    # Create replay and stub adapters
+    replay_price = ReplayPriceAdapter(asset_key, bars)
+    stub_onchain = StubAdapter("onchain")
+    stub_news = StubAdapter("news")
+    stub_macro = StubAdapter("macro")
 
-        # Skip first 30 bars (need minimum data for indicators)
-        if len(lookback) < 30:
-            continue
+    # Load strategy config — use existing state strategy or fallback
+    strategy = None
+    real_state_dir = base_dir / "state"
+    strat_path = real_state_dir / asset_key / "strategy.yaml"
+    if strat_path.exists():
+        import yaml
+        with open(strat_path) as f:
+            strategy = yaml.safe_load(f)
+        if strategy:
+            strategy["_asset"] = asset_key
+            # Manually validate version
+            ver = strategy.get("version", 0)
+            from hermes_trading.loop import TradingLoop
+            expected = getattr(TradingLoop, "STRATEGY_SCHEMA_VERSION", 22)
+            if ver and int(ver) < expected:
+                print(f"  ⚠️  {asset_key}: strategy v{ver} < current v{expected}")
+            elif not ver:
+                print(f"  ⚠️  {asset_key}: no version field")
+            print(f"📖 Loaded strategy from {strat_path}")
 
-        cycles_since_trade += 1
+    if not strategy:
+        # Build a basic MR strategy from defaults
+        strategy = {
+            "rsi": {"oversold_threshold": 27, "period": 14},
+            "position_sizing": {"enabled": True, "r_base": 0.01, "atr_period": 14},
+            "kill_switches": {"enabled": True, "max_open_positions": 2, "max_daily_loss_pct": 2.5},
+            "confidence": {"enabled": True, "threshold_full": 0.60, "threshold_half": 0.55},
+            "trend_filter": {"enabled": True, "adx_period": 14},
+            "hurst": {"enabled": True, "min_bars": 500, "mr_threshold": 0.45, "trend_threshold": 0.55},
+            "macro": {"enabled": False},
+        }
+        print("⚠️  Using fallback strategy config (no strategy.yaml for this asset)")
 
-        if position is None:
-            # Check entry
-            if cycles_since_trade >= cooldown_cycles:
-                should_enter, reason = evaluate_entry(lookback, strategy)
-                if should_enter:
-                    position = {
-                        "entry_price": current_price,
-                        "entry_time": candle["timestamp"],
-                        "entry_idx": i,
-                        "chandelier_high": current_price,
-                        "scaled_out": False,
-                        "stop_loss_pct": strategy.get("stop_loss_pct", 3.0),
-                    }
-        else:
-            # Update chandelier high
-            if current_price > position["chandelier_high"]:
-                position["chandelier_high"] = current_price
+    # Save strategy to temp state dir so _close_position can reload it
+    strat_dir = loop.state_dir / asset_key
+    strat_dir.mkdir(parents=True, exist_ok=True)
+    import yaml as yaml_save
+    with open(strat_dir / "strategy.yaml", "w") as f:
+        yaml_save.dump(strategy, f)
 
-            # Check exit
-            should_exit, exit_reason, is_partial = manage_exit(
-                position["entry_price"],
-                current_price,
-                lookback,
+    # ── Variant overrides ──
+    # After strategy is loaded, apply any CLI overrides
+    try:
+        import __main__
+        if hasattr(__main__, 'FORCE_MR') and __main__.FORCE_MR:
+            strategy.setdefault("hurst", {})["block_on_trending"] = False
+            strategy.setdefault("rsi", {})["oversold_threshold"] = 27
+            print("🔧 Force MR override: block_on_trending=False, rsi.oversold_threshold=27")
+            # Re-save with overrides
+            with open(strat_dir / "strategy.yaml", "w") as f:
+                yaml_save.dump(strategy, f)
+    except (ImportError, AttributeError):
+        pass
+
+    # Results collector
+    results = BacktestResult()
+
+    print(f"\n🚀 Running backtest for {asset_key} on {len(bars)} bars...")
+    print(f"   Start balance: ${start_balance:.2f}")
+    print(f"   Fee rate: {fee_rate*100:.3f}%")
+    print(f"   Strategy bars: 1m")
+
+    # Log starting equity
+    results.add_equity_point(bars[0]["timestamp"], start_balance)
+
+    # Main replay loop — feed every bar through the exact same _cycle() code
+    while replay_price.idx < len(bars):
+        idx = replay_price.current_bar_idx
+
+        # Run one cycle — exact same code path as paper/live, but silent
+        # (cycle prints per-bar diagnostics via print() — suppress those)
+        with redirect_stdout(io.StringIO()):
+            await loop._cycle(
+                asset_key,
+                goal,
                 strategy,
-                position["chandelier_high"],
-                position["scaled_out"],
+                replay_price,  # instead of price_adapter
+                stub_onchain,  # instead of onchain_adapter
+                stub_news,  # instead of news_adapter
+                stub_macro,  # instead of macro_adapter
             )
 
-            if is_partial and not position["scaled_out"]:
-                # Scale out 50% — mark as partial, don't close fully
-                position["scaled_out"] = True
-                # Record partial close
-                pnl = (
-                    (current_price - position["entry_price"]) / position["entry_price"]
-                ) * 100
-                trades.append(
-                    {
-                        "entry_time": position["entry_time"],
-                        "exit_time": candle["timestamp"],
-                        "entry_price": position["entry_price"],
-                        "exit_price": current_price,
-                        "pnl_pct": round(pnl, 2),
-                        "reason": exit_reason,
-                        "partial": True,
-                    }
-                )
-            elif should_exit:
-                pnl = (
-                    (current_price - position["entry_price"]) / position["entry_price"]
-                ) * 100
-                trades.append(
-                    {
-                        "entry_time": position["entry_time"],
-                        "exit_time": candle["timestamp"],
-                        "entry_price": position["entry_price"],
-                        "exit_price": current_price,
-                        "pnl_pct": round(pnl, 2),
-                        "reason": exit_reason,
-                        "partial": False,
-                    }
-                )
-                position = None
-                cycles_since_trade = 0
+        # Track equity after each cycle
+        balance = loop.paper_balance
+        results.add_equity_point(bars[idx]["timestamp"], balance)
 
-    # Close any remaining position at last price
-    if position is not None:
-        pnl = (
-            (candles[-1]["close"] - position["entry_price"]) / position["entry_price"]
-        ) * 100
-        trades.append(
-            {
-                "entry_time": position["entry_time"],
-                "exit_time": candles[-1]["timestamp"],
-                "entry_price": position["entry_price"],
-                "exit_price": candles[-1]["close"],
-                "pnl_pct": round(pnl, 2),
-                "reason": "end_of_data",
-                "partial": False,
-            }
+        # Progress indicator every 200 bars
+        if idx > 0 and idx % 200 == 0:
+            print(f"   {idx}/{len(bars)} bars (ETA: ~{idx} bars) — equity: ${balance:.2f}")
+
+    # Force-close any remaining open MR positions at the last bar price
+    for pos_key in list(loop.positions.keys()):
+        pos = loop.positions[pos_key]
+        if pos is None:
+            continue
+        last_bar = bars[-1]
+        final_price = float(last_bar["close"])
+        pnl_pct = (final_price - pos["entry_price"]) / pos["entry_price"] * 100
+        loop._close_position(
+            pos_key,
+            final_price,
+            pnl_pct,
+            "backtest_end",
+            {"candles": [], "source": "replay"},
         )
+        # Update equity after close
+        results.add_equity_point(last_bar["timestamp"], loop.paper_balance)
 
-    metrics = compute_metrics(trades)
-    return trades, metrics
+    # Force-close any remaining trend positions
+    for pos_key in list(loop.trend_positions.keys()):
+        pos = loop.trend_positions[pos_key]
+        if pos is None:
+            continue
+        last_bar = bars[-1]
+        final_price = float(last_bar["close"])
+        pnl_pct = (final_price - pos["entry_price"]) / pos["entry_price"] * 100
+        position = {
+            "asset": pos_key,
+            "entry_price": pos["entry_price"],
+            "entry_time": pos.get("entry_time", ""),
+        }
+        loop.positions[pos_key] = position  # temporarily move to MR slot for close
+        loop._close_position(
+            pos_key,
+            final_price,
+            pnl_pct,
+            "backtest_end_trend",
+            {"candles": [], "source": "replay"},
+        )
+        loop.positions[pos_key] = None
+        loop.trend_positions[pos_key] = None
+
+        results.add_equity_point(last_bar["timestamp"], loop.paper_balance)
+
+    # Collect trades from the trade logger
+    trades_file = loop.state_dir / asset_key / "trades.jsonl"
+    if trades_file.exists():
+        with open(trades_file) as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    try:
+                        trade = json.loads(line)
+                        results.add_trade(trade)
+                    except json.JSONDecodeError:
+                        pass
+
+    results.finalize()
+    results.print_summary()
+
+    # Cleanup temp state_dir
+    import shutil
+    if loop.state_dir.exists() and "backtest" in str(loop.state_dir):
+        shutil.rmtree(loop.state_dir, ignore_errors=True)
+
+    return results
+
+
+# ── CLI Entry Point ─────────────────────────────────────────────
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="Backtest trading strategy on bar data"
-    )
-    parser.add_argument(
-        "assets", nargs="*", default=[], help="Asset keys (e.g. SOL_USDT)"
-    )
-    parser.add_argument(
-        "--all", action="store_true", help="Backtest all assets in state dir"
-    )
-    parser.add_argument(
-        "--report", action="store_true", help="Print detailed trade report"
-    )
-    parser.add_argument(
-        "--timeframe",
-        default="1m",
-        choices=["1m", "1h"],
-        help="Bar timeframe (default: 1m)",
-    )
+    parser = argparse.ArgumentParser(description="Hermes replay-mode backtester")
+    parser.add_argument("asset", nargs="?", default="ETH_USDT", help="Asset key (e.g. ETH_USDT)")
+    parser.add_argument("--balance", type=float, default=1000.0, help="Starting paper balance")
+    parser.add_argument("--db", default="data/bars.db", help="Path to bars.db")
+    parser.add_argument("--fee", type=float, default=0.00025, help="Taker fee rate")
     args = parser.parse_args()
 
-    if args.all:
-        assets = [
-            p.name
-            for p in STATE_DIR.iterdir()
-            if p.is_dir() and (p / "strategy.yaml").exists()
-        ]
-    elif args.assets:
-        assets = args.assets
-    else:
-        print("Usage: uv run python -m hermes_trading.backtest SOL_USDT [XRP_USDT ...]")
-        print("       uv run python -m hermes_trading.backtest --all")
-        sys.exit(1)
-
-    for asset_key in assets:
-        trades, metrics = run_backtest(asset_key, timeframe=args.timeframe)
-        print(format_metrics(metrics))
-
-        if args.report and trades:
-            print("\n  Trade log:")
-            print(f"  {'#':4s} {'Entry':12s} {'Exit':12s} {'PnL%':8s} {'Reason':20s}")
-            for i, t in enumerate(trades[-20:]):  # last 20
-                et = datetime.fromtimestamp(t["entry_time"]).strftime("%H:%M")
-                xt = datetime.fromtimestamp(t["exit_time"]).strftime("%H:%M")
-                pnl = f"{t['pnl_pct']:+.2f}%"
-                part = " (50%)" if t.get("partial") else ""
-                print(
-                    f"  {i + 1:4d} {et:12s} {xt:12s} {pnl:8s} {t['reason'] + part:20s}"
-                )
-
-        print()
-
-    # Aggregate metrics across assets
-    if len(assets) > 1:
-        all_metrics = []
-        for asset_key in assets:
-            _, m = run_backtest(asset_key, timeframe=args.timeframe)
-            all_metrics.append((asset_key, m))
-
-        print("═" * 50)
-        print(f"  CROSS-ASSET SUMMARY  ({args.timeframe})")
-        print("═" * 50)
-        total_trades = sum(m["total_trades"] for _, m in all_metrics)
-        avg_wr = sum(m["win_rate"] for _, m in all_metrics) / len(all_metrics)
-        total_pnl = sum(m["total_pnl_pct"] for _, m in all_metrics)
-        avg_sharpe = sum(m["sharpe_ratio"] for _, m in all_metrics) / len(all_metrics)
-        print(f"  Assets: {', '.join(a for a, _ in all_metrics)}")
-        print(f"  Total trades: {total_trades} | Avg WR: {avg_wr:.1f}%")
-        print(f"  Combined PnL: {total_pnl:+.2f}% | Avg Sharpe: {avg_sharpe:.2f}")
-        print(f"  Time range: {all_metrics[0][1].get('time_range', 'N/A')}")
-        print("═" * 50)
+    asyncio.run(run_backtest(
+        asset_key=args.asset,
+        start_balance=args.balance,
+        bars_db=args.db,
+        fee_rate=args.fee,
+    ))
 
 
 if __name__ == "__main__":

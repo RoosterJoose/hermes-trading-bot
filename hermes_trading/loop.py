@@ -57,11 +57,15 @@ class TradingLoop:
         base_dir: Path,
         mode: str = "paper",
         initial_balance: float = 10000.0,
+        replay_mode: bool = False,
+        quiet: bool = False,
     ):
         self.assets = assets
         self.state_dir = state_dir
         self.base_dir = base_dir
         self.mode = mode
+        self.replay_mode = replay_mode
+        self.quiet = quiet
         self.cycle_interval = 60  # seconds — check every minute
         self.max_consecutive_failures = 5
         self.user_risk_accepted = (
@@ -732,7 +736,7 @@ class TradingLoop:
         cooldown_remaining = cooldown_cycles - self.cycles_since_last_trade.get(
             asset_key, 999
         )
-        rsi_status = f"RSI={rsi:.1f}" if rsi is not None else "RSI=---"
+        rsi_status = f"RSI={rsi or 0:.1f}" if rsi is not None else "RSI=---"
 
         # Per-asset percentile RSI threshold (q05 majors / q10 alts from bars.db)
         # Takes priority over dynamic RSI when enough data accumulated
@@ -1064,7 +1068,7 @@ class TradingLoop:
                     )
 
                     print(
-                        f"  {asset_key}: RSI={rsi:.1f} < {effective_threshold} -> ENTRY ({decision}, score={cs:.3f}, rsi={comp['rsi']:.2f} vol={comp['volume']:.2f} reg={comp['regime']:.2f} adx={comp['adx']:.2f} fund={comp['funding']:.2f})"
+                        f"  {asset_key}: RSI={rsi or 0:.1f} < {effective_threshold} -> ENTRY ({decision}, score={cs or 0:.3f}, rsi={comp.get("rsi",0):.2f} vol={comp.get("volume",0):.2f} reg={comp['regime']:.2f} adx={comp['adx']:.2f} fund={comp['funding']:.2f})"
                     )
                 else:
                     self._log_skipped_setup(
@@ -1076,7 +1080,7 @@ class TradingLoop:
                         confidence,
                     )
                     print(
-                        f"  {asset_key}: RSI={rsi:.1f} < {effective_threshold} -> LOW CONFIDENCE (score={cs:.3f}, below 0.55, comp: rsi={comp['rsi']:.2f} vol={comp['volume']:.2f} reg={comp['regime']:.2f} fund={comp.get('funding', 0):.2f})"
+                        f"  {asset_key}: RSI={rsi or 0:.1f} < {effective_threshold or 0} -> LOW CONFIDENCE (score={cs or 0:.3f}, below 0.55, comp: rsi={comp.get('rsi',0):.2f} vol={comp.get('volume',0):.2f} reg={comp.get('regime',0):.2f} fund={comp.get('funding', 0):.2f})"
                     )
 
         # ── 8. Exit check for existing position ──
