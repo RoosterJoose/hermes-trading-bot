@@ -142,6 +142,7 @@ class Handler(SimpleHTTPRequestHandler):
             "stale": stale,
             "killSwitchActive": False,
             "pausedAssets": {k: v for k, v in list(paused.items())[:5]},
+            "tunnelUrl": self._get_tunnel_url(),
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "positions": [
                 {
@@ -226,6 +227,18 @@ class Handler(SimpleHTTPRequestHandler):
         self.send_header("Access-Control-Allow-Origin", "*")
         self.end_headers()
         self.wfile.write(body)
+
+    def _get_tunnel_url(self) -> str:
+        """Read current tunnel URL from state file."""
+        try:
+            f = self.directory  # /opt/data/.../hermes-ui/out
+            parent = Path(f).parent.parent  # back to hermes-trading/
+            url_file = parent / "state" / "tunnel_url.txt"
+            if url_file.exists():
+                return url_file.read_text().strip()
+        except Exception:
+            pass
+        return ""
 
     def log_message(self, format, *args):
         # Quiet mode
