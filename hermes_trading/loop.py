@@ -19,7 +19,7 @@ import sys
 import yaml
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Set
 
 from hermes_trading import state as hm_state
 
@@ -135,6 +135,9 @@ class TradingLoop:
             a["key"]: [] for a in assets
         }  # bool: True=win, False=loss
         self.portfolio_trade_results: list = []  # global rolling trade outcomes
+
+        # Same-candle entry guard — prevents TP/SL on entry candle
+        self._just_entered: Set[str] = set()
 
         # BTC correlation sector cap — rolling 1h return correlation per asset
         self._btc_correlations: Dict[str, float] = {}  # asset_key → rolling Pearson r
@@ -1237,135 +1240,134 @@ class TradingLoop:
         # ── 8. Exit check for existing position ──
         existing = self.positions.get(asset_key)
         if existing and current_price > 0:
-            entry_price = existing["entry_price"]
-            pnl_pct = ((current_price - entry_price) / entry_price) * 100
-            stop_loss_pct = strategy.get("stop_loss_pct", 2.0)
-
-            # Dynamic ATR-based stop loss (overrides static SL when data available)
-            if len(candles) >= 15:
-                atr_pct = self._calc_atr(candles, period=14)
-                if atr_pct is not None and atr_pct > 0:
-                    sl_mult = strategy.get("atr_sl_mult_alt", 3.0)
-                    if "BTC" in asset_key or "ETH" in asset_key:
-                        sl_mult = strategy.get("atr_sl_mult_major", 2.0)
-                    atr_sl_pct = atr_pct * sl_mult * 100
-                    # Clamp to sane range
-                    sl_floor = strategy.get("atr_sl_floor_pct", 1.0)
-                    sl_ceiling = strategy.get("atr_sl_ceiling_pct", 10.0)
-                    stop_loss_pct = min(max(atr_sl_pct, sl_floor), sl_ceiling)
-
-            # ── 8a. Hard stop loss — always active, full position ──
-            if pnl_pct < -stop_loss_pct:
-                ctx = self._current_market_context()
-                self._close_position(
-                    asset_key, current_price, pnl_pct, "stop_loss", price_data, ctx
-                )
-
-            # ── 8b. Time-based exit — close if held beyond max cycles ──
-            elif self._check_time_exit(asset_key, existing, current_price, strategy):
-                ctx = self._current_market_context()
-                pnl_exit = ((current_price - entry_price) / entry_price) * 100
-                self._close_position(
-                    asset_key, current_price, pnl_exit, "time_exit", price_data, ctx
-                )
-                print(f"  {asset_key}: ⏰ TIME EXIT @ {current_price:.4f}")
-
+            # Skip exit checks on same cycle as entry (prevents same-candle TP/SL
+            # where TP1 can trigger on the entry candle before price moves).
+            if asset_key in self._just_entered:
+                self._just_entered.discard(asset_key)
             else:
-                # ── 8c. Update chandelier high-water mark ──
-                # After TP2, track runner_high separately so the Chandelier
-                # anchor resets — prevents the TP2 spike from choking the runner.
-                if existing.get("tp2_hit", False):
-                    existing["runner_high"] = max(
-                        existing.get("runner_high", current_price), current_price
+                entry_price = existing["entry_price"]
+                pnl_pct = ((current_price - entry_price) / entry_price) * 100
+                stop_loss_pct = strategy.get("stop_loss_pct", 2.0)
+
+                # Dynamic ATR-based stop loss (overrides static SL when data available)
+                if len(candles) >= 15:
+                    atr_pct = self._calc_atr(candles, period=14)
+                    if atr_pct is not None and atr_pct > 0:
+                        sl_mult = strategy.get("atr_sl_mult_alt", 3.0)
+                        if "BTC" in asset_key or "ETH" in asset_key:
+                            sl_mult = strategy.get("atr_sl_mult_major", 2.0)
+                        atr_sl_pct = atr_pct * sl_mult * 100
+                        # Clamp to sane range
+                        sl_floor = strategy.get("atr_sl_floor_pct", 1.0)
+                        sl_ceiling = strategy.get("atr_sl_ceiling_pct", 10.0)
+                        stop_loss_pct = min(max(atr_sl_pct, sl_floor), sl_ceiling)
+
+                # ── 8a. Hard stop loss — always active, full position ──
+                if pnl_pct < -stop_loss_pct:
+                    ctx = self._current_market_context()
+                    self._close_position(
+                        asset_key, current_price, pnl_pct, "stop_loss", price_data, ctx
                     )
+
+                # ── 8b. Time-based exit — close if held beyond max cycles ──
+                elif self._check_time_exit(asset_key, existing, current_price, strategy):
+                    ctx = self._current_market_context()
+                    pnl_exit = ((current_price - entry_price) / entry_price) * 100
+                    self._close_position(
+                        asset_key, current_price, pnl_exit, "time_exit", price_data, ctx
+                    )
+                    print(f"  {asset_key}: ⏰ TIME EXIT @ {current_price:.4f}")
+
                 else:
-                    existing["chandelier_high"] = max(
-                        existing.get("chandelier_high", entry_price), current_price
-                    )
-
-                # ── 8d. Scale-out TP1 (50% at 20 EMA reversion, min profit required) ──
-                if not existing.get("scaled_out", False) and len(candles) >= 22:
-                    ema_value = self._calc_ema_value(
-                        [c["close"] for c in candles], period=20
-                    )
-                    prev_close = candles[-2]["close"]
-                    scale_out_min_R = strategy.get("scale_out_min_R", 0.3)
-                    min_profit_for_tp1 = scale_out_min_R * abs(stop_loss_pct)
-                    if (
-                        ema_value is not None
-                        and prev_close < ema_value
-                        and current_price >= ema_value
-                        and pnl_pct >= min_profit_for_tp1
-                    ):
-                        # Price crossed above 20 EMA with minimum profit — scale out 50%
-                        ctx = self._current_market_context()
-                        self._close_position(
-                            asset_key,
-                            current_price,
-                            pnl_pct,
-                            "scale_out_tp1",
-                            price_data,
-                            ctx,
-                            partial=True,
-                            slice_pct=0.5,
+                    # ── 8c. Update chandelier high-water mark ──
+                    if existing.get("tp2_hit", False):
+                        existing["runner_high"] = max(
+                            existing.get("runner_high", current_price), current_price
                         )
-                        print(
-                            f"  {asset_key}: ✅ SCALE OUT 50% @ {current_price:.4f} (EMA reversion)"
+                    else:
+                        existing["chandelier_high"] = max(
+                            existing.get("chandelier_high", entry_price), current_price
                         )
 
-                # ── 8e. Chandelier trailing stop on remaining position ──
-                if existing.get("scaled_out", False):
-                    ch_mult = strategy.get("chandelier_mult_alts", 4.0)
-                    if "BTC" in asset_key or "ETH" in asset_key:
-                        ch_mult = strategy.get("chandelier_mult_major", 2.5)
-                    # After TP2, use runner_high (resets from spike) instead of
-                    # the absolute chandelier_high from entry, so the runner
-                    # has breathing room after the TP2 take-profit.
-                    trail_high = (
-                        existing.get("runner_high")
-                        if existing.get("tp2_hit", False) and existing.get("runner_high")
-                        else existing["chandelier_high"]
-                    )
-                    chandelier = self._calc_chandelier_exit(
-                        candles, trail_high, ch_mult
-                    )
-                    if chandelier is not None and current_price < chandelier:
-                        ctx = self._current_market_context()
-                        remaining_pnl = (
-                            (current_price - entry_price) / entry_price
-                        ) * 100
-                        self._close_position(
-                            asset_key,
-                            current_price,
-                            remaining_pnl,
-                            "chandelier_exit",
-                            price_data,
-                            ctx,
+                    # ── 8d. Scale-out TP1 (50% at 20 EMA reversion, min profit required) ──
+                    if not existing.get("scaled_out", False) and len(candles) >= 22:
+                        ema_value = self._calc_ema_value(
+                            [c["close"] for c in candles], period=20
                         )
-                        print(
-                            f"  {asset_key}: 🔚 CHANDELIER EXIT @ {current_price:.4f} (trailed from {existing.get('runner_high', existing['chandelier_high']):.4f})"
-                        )
+                        prev_close = candles[-2]["close"]
+                        scale_out_min_R = strategy.get("scale_out_min_R", 0.3)
+                        min_profit_for_tp1 = scale_out_min_R * abs(stop_loss_pct)
+                        if (
+                            ema_value is not None
+                            and prev_close < ema_value
+                            and current_price >= ema_value
+                            and pnl_pct >= min_profit_for_tp1
+                        ):
+                            ctx = self._current_market_context()
+                            self._close_position(
+                                asset_key,
+                                current_price,
+                                pnl_pct,
+                                "scale_out_tp1",
+                                price_data,
+                                ctx,
+                                partial=True,
+                                slice_pct=0.5,
+                            )
+                            print(
+                                f"  {asset_key}: ✅ SCALE OUT 50% @ {current_price:.4f} (EMA reversion)"
+                            )
 
-                # ── 8f. TP2 — take another slice at target R ──
-                if existing.get("scaled_out", False) and not existing.get("tp2_hit", False):
-                    tp2_target_R = strategy.get("tp2_target_R", 1.5)
-                    tp2_slice = strategy.get("tp2_slice", 0.5)
-                    tp2_price_target = tp2_target_R * abs(stop_loss_pct)
-                    if pnl_pct >= tp2_price_target:
-                        ctx = self._current_market_context()
-                        self._close_position(
-                            asset_key,
-                            current_price,
-                            pnl_pct,
-                            "tp2",
-                            price_data,
-                            ctx,
-                            partial=True,
-                            slice_pct=tp2_slice,
+                    # ── 8e. Chandelier trailing stop on remaining position ──
+                    if existing.get("scaled_out", False):
+                        ch_mult = strategy.get("chandelier_mult_alts", 4.0)
+                        if "BTC" in asset_key or "ETH" in asset_key:
+                            ch_mult = strategy.get("chandelier_mult_major", 2.5)
+                        trail_high = (
+                            existing.get("runner_high")
+                            if existing.get("tp2_hit", False) and existing.get("runner_high")
+                            else existing["chandelier_high"]
                         )
-                        print(
-                            f"  {asset_key}: 🎯 TP2 HIT @ {current_price:.4f} (pnl={pnl_pct:+.2f}%, target={tp2_target_R}R)"
+                        chandelier = self._calc_chandelier_exit(
+                            candles, trail_high, ch_mult
                         )
+                        if chandelier is not None and current_price < chandelier:
+                            ctx = self._current_market_context()
+                            remaining_pnl = (
+                                (current_price - entry_price) / entry_price
+                            ) * 100
+                            self._close_position(
+                                asset_key,
+                                current_price,
+                                remaining_pnl,
+                                "chandelier_exit",
+                                price_data,
+                                ctx,
+                            )
+                            print(
+                                f"  {asset_key}: 🔚 CHANDELIER EXIT @ {current_price:.4f} (trailed from {existing.get('runner_high', existing['chandelier_high']):.4f})"
+                            )
+
+                    # ── 8f. TP2 — take another slice at target R ──
+                    if existing.get("scaled_out", False) and not existing.get("tp2_hit", False):
+                        tp2_target_R = strategy.get("tp2_target_R", 1.5)
+                        tp2_slice = strategy.get("tp2_slice", 0.5)
+                        tp2_price_target = tp2_target_R * abs(stop_loss_pct)
+                        if pnl_pct >= tp2_price_target:
+                            ctx = self._current_market_context()
+                            self._close_position(
+                                asset_key,
+                                current_price,
+                                pnl_pct,
+                                "tp2",
+                                price_data,
+                                ctx,
+                                partial=True,
+                                slice_pct=tp2_slice,
+                            )
+                            print(
+                                f"  {asset_key}: 🎯 TP2 HIT @ {current_price:.4f} (pnl={pnl_pct:+.2f}%, target={tp2_target_R}R)"
+                            )
 
         # ── 8e. Check optimizer readiness (dormant until 200+ trades) ──
         self._check_optimizer_ready(asset_key)
@@ -1506,8 +1508,17 @@ class TradingLoop:
                 # Trend mode: high RSI = momentum strength
                 rsi_score = min(1.0, max(0.0, (rsi - 55) / 20))
             else:
-                # MR mode (default): low RSI = oversold opportunity
-                rsi_score = min(1.0, max(0.0, (effective_threshold - rsi) / 10))
+                # MR mode: distance-decay from extreme threshold up to RSI 35
+                # Gives partial credit for near-extreme RSI values (e.g., RSI 23
+                # with threshold 8.9 scores ~0.46 instead of 0.0). Previously used
+                # (threshold - rsi) / 10 which hard-zeroed all realistic candidates.
+                soft_ceiling = 35.0
+                if rsi <= effective_threshold:
+                    rsi_score = 1.0
+                elif rsi >= soft_ceiling:
+                    rsi_score = 0.0
+                else:
+                    rsi_score = 1.0 - ((rsi - effective_threshold) / (soft_ceiling - effective_threshold))
 
         # ── 2. Volume Score ──
         volume_score = 0.5  # default neutral when data unavailable
@@ -1523,7 +1534,10 @@ class TradingLoop:
                 avg_vol = sum(recent_volumes[:-1]) / max(len(recent_volumes) - 1, 1)
                 if avg_vol > 0:
                     vol_ratio = volumes[-1] / avg_vol
-                    volume_score = min(1.0, vol_ratio / 2.0)
+                    # Wider dynamic range: 0.0 at 0.5x avg volume, 1.0 at 2.0x avg.
+                    # Previously clamped to ~0.5 range (vol_ratio / 2.0), making
+                    # volume a near-constant half-credit with no discriminative power.
+                    volume_score = max(0.0, min(1.0, (vol_ratio - 0.5) / 1.5))
                     volume_available = True
 
         # ── 3. Lower-Low Score (absence of cascade = good) ──
@@ -1553,15 +1567,16 @@ class TradingLoop:
                 )  # 0.0 pos→1.0, 0.5 pos→0.25, 0.67+→0.0
 
         # ── 5. Regime Score ──
+        # Measures how suitable the current market regime is for MR strategy.
+        # Calibrated for wider dynamic range: strong regimes score high,
+        # unfavorable regimes score low, random_walk is neutral.
         regime_score = 0.5  # default neutral
         if hurst_mode == "trend":
-            regime_score = 0.8 if hurst.get("active") else 0.5
+            regime_score = 0.85 if hurst.get("active") else 0.50
         elif hurst_mode == "mean_reversion":
-            regime_score = 0.8 if hurst.get("active") else 0.6
+            regime_score = 0.95 if hurst.get("active") else 0.70
         elif hurst_mode == "random_walk":
-            regime_score = (
-                0.6  # reduced MR (was 0.2 — too restrictive per research spec)
-            )
+            regime_score = 0.55  # neutral — no clear edge either way
 
         # ── 6. ADX Score (low ADX = good for mean reversion) ──
         adx_score = 0.5
@@ -1701,6 +1716,7 @@ class TradingLoop:
             "chandelier_high": price,  # highest price since entry (for trailing)
         }
         self.positions[asset_key] = position
+        self._just_entered.add(asset_key)
         print(
             f"📈 {asset_key}: OPEN at {price:.6f} | signal={signal} | size_r={size_r}"
         )
@@ -2403,10 +2419,11 @@ class TradingLoop:
                 print(f"  {asset_key}: 📊 Trend setup — {entry_signal['reason']}")
             return
 
-        # 4. Cooldown: at least 30 cycles between trend entries
+        # 4. Cooldown: at least 10 cycles between trend entries (reduced from 30
+        #    to prevent trend sleeve being effectively inert)
         trend_last = self.trend_cooldown.get(asset_key, 999)
-        if trend_last < 30:
-            print(f"  {asset_key}: 📊 Trend cooldown {trend_last}/30")
+        if trend_last < 10:
+            print(f"  {asset_key}: 📊 Trend cooldown {trend_last}/10")
             return
 
         # 5. Cross-sleeve net exposure: don't open trend if MR already has this asset
