@@ -151,6 +151,10 @@ class TradingLoop:
         self.portfolio_hard_halt_pct = 4.0  # -4% portfolio daily → global halt
         self.portfolio_loss_halted = False
 
+        # Event-risk calendar kill switch
+        self.event_cal_blackout: Optional[Dict] = None  # Blocked state from is_near_macro_event()
+        self._init_event_calendar()
+
         # Paper balance tracking (dollar PnL)
         self.initial_balance = initial_balance
         self.paper_balance = initial_balance
@@ -167,6 +171,69 @@ class TradingLoop:
         # Optimizer readiness
         self.optimizer_status: dict = {"status": "dormant"}
         self.optimizer_logs: dict = {}  # asset_key → list of optimization results
+
+    def _init_event_calendar(self):
+        """Load event calendar config and build events list."""
+        from hermes_trading.event_calendar import load_event_calendar
+        goal_path = self.state_dir / "goal.yaml"
+        self._event_calendar_events = load_event_calendar(goal_path)
+
+    def _check_event_calendar(self) -> Dict:
+        """Check if we're in a macro-event blackout window.
+        
+        Returns {'blocked': bool, 'reason': str or None, ...}
+        """
+        from hermes_trading.event_calendar import is_near_macro_event
+        # Load config from goal.yaml
+        goal_path = self.state_dir / "goal.yaml"
+        flatten_mins = 120  # default: 2h before
+        hold_mins = 60      # default: 1h after
+        try:
+            import yaml
+            if goal_path.exists():
+                with open(goal_path) as f:
+                    cfg = yaml.safe_load(f) or {}
+                ec = cfg.get("event_calendar", {})
+                if not ec.get("enabled", True):
+                    return {"blocked": False, "reason": None,
+                            "nearest_event": None, "minutes_until_event": None}
+                flatten_mins = ec.get("flatten_minutes_before", flatten_mins)
+                hold_mins = ec.get("hold_minutes_after", hold_mins)
+        except Exception:
+            pass
+        return is_near_macro_event(
+            self._event_calendar_events,
+            flatten_minutes_before=flatten_mins,
+            hold_minutes_after=hold_mins,
+        )
+
+    def _flatten_all_positions(self, reason: str, price_data: dict):
+        """Flatten ALL sleeves — MR and trend positions — for a given reason.
+        
+        Called by event-risk calendar kill switch to exit before macro events.
+        """
+        from datetime import datetime, timezone
+        ctx = self._current_market_context()
+        now_price = price_data.get("price", 0)
+        # Flatten MR positions
+        for asset_key, pos in list(self.positions.items()):
+            if pos is not None:
+                price = pos.get("current_price", now_price)
+                entry = pos["entry_price"]
+                pnl = ((price - entry) / entry) * 100 if price and entry else 0
+                self._close_position(asset_key, price, pnl, f"flatten_{reason}",
+                                     price_data, ctx)
+                print(f"  {asset_key}: 🚨 FLATTENED (MR) — {reason}")
+        # Flatten trend positions
+        for asset_key, pos in list(self.trend_positions.items()):
+            if pos is not None:
+                price = pos.get("current_price", now_price)
+                entry = pos["entry_price"]
+                pnl = ((price - entry) / entry) * 100 if price and entry else 0
+                self._close_position(asset_key, price, pnl, f"flatten_{reason}",
+                                     price_data, ctx)
+                self.trend_positions[asset_key] = None
+                print(f"  {asset_key}: 🚨 FLATTENED (TREND) — {reason}")
 
     async def run(self):
         """Main loop — runs until cancelled."""
@@ -244,6 +311,21 @@ class TradingLoop:
                         )
                     self.portfolio_loss_halted = False
 
+                # Event-risk calendar check — flatten & block before macro events
+                cal_check = self._check_event_calendar()
+                if cal_check["blocked"]:
+                    if not getattr(self, "_event_cal_warned", False):
+                        print(f"📅 EVENT CAL KILL SWITCH: {cal_check['reason']}")
+                        # Flatten once when blackout starts
+                        btc_px = (self.btc_context or {}).get("btc_price", 0)
+                        price_data = {"price": btc_px, "source": "event_calendar"}
+                        self._flatten_all_positions("macro_event", price_data)
+                        self._event_cal_warned = True
+                    self._event_cal_blackout = cal_check
+                else:
+                    self._event_cal_blackout = None
+                    self._event_cal_warned = False
+
                 # ── Cycle through each asset ──
                 for asset_cfg in self.assets:
                     key = asset_cfg["key"]
@@ -253,6 +335,10 @@ class TradingLoop:
 
                     # Portfolio-level hard halt — skip all asset processing
                     if self.portfolio_loss_halted:
+                        continue
+
+                    # Event calendar blackout — skip entries (flatten already done)
+                    if self._event_cal_blackout:
                         continue
 
                     await self._cycle(
@@ -1125,18 +1211,21 @@ class TradingLoop:
                     existing.get("chandelier_high", entry_price), current_price
                 )
 
-                # ── 8d. Scale-out TP1 (50% at 20 EMA reversion) ──
+                # ── 8d. Scale-out TP1 (50% at 20 EMA reversion, min profit required) ──
                 if not existing.get("scaled_out", False) and len(candles) >= 22:
                     ema_value = self._calc_ema_value(
                         [c["close"] for c in candles], period=20
                     )
                     prev_close = candles[-2]["close"]
+                    scale_out_min_R = strategy.get("scale_out_min_R", 0.3)
+                    min_profit_for_tp1 = scale_out_min_R * abs(stop_loss_pct)
                     if (
                         ema_value is not None
                         and prev_close < ema_value
                         and current_price >= ema_value
+                        and pnl_pct >= min_profit_for_tp1
                     ):
-                        # Price crossed above 20 EMA — scale out 50%
+                        # Price crossed above 20 EMA with minimum profit — scale out 50%
                         ctx = self._current_market_context()
                         self._close_position(
                             asset_key,
@@ -1146,6 +1235,7 @@ class TradingLoop:
                             price_data,
                             ctx,
                             partial=True,
+                            slice_pct=0.5,
                         )
                         print(
                             f"  {asset_key}: ✅ SCALE OUT 50% @ {current_price:.4f} (EMA reversion)"
@@ -1174,6 +1264,27 @@ class TradingLoop:
                         )
                         print(
                             f"  {asset_key}: 🔚 CHANDELIER EXIT @ {current_price:.4f} (trailed from {existing['chandelier_high']:.4f})"
+                        )
+
+                # ── 8f. TP2 — take another slice at target R ──
+                if existing.get("scaled_out", False) and not existing.get("tp2_hit", False):
+                    tp2_target_R = strategy.get("tp2_target_R", 1.5)
+                    tp2_slice = strategy.get("tp2_slice", 0.5)
+                    tp2_price_target = tp2_target_R * abs(stop_loss_pct)
+                    if pnl_pct >= tp2_price_target:
+                        ctx = self._current_market_context()
+                        self._close_position(
+                            asset_key,
+                            current_price,
+                            pnl_pct,
+                            "tp2",
+                            price_data,
+                            ctx,
+                            partial=True,
+                            slice_pct=tp2_slice,
+                        )
+                        print(
+                            f"  {asset_key}: 🎯 TP2 HIT @ {current_price:.4f} (pnl={pnl_pct:+.2f}%, target={tp2_target_R}R)"
                         )
 
         # ── 8e. Check optimizer readiness (dormant until 200+ trades) ──
@@ -1505,6 +1616,7 @@ class TradingLoop:
             "market_context": market_ctx,
             "confidence_score": confidence_score,
             "scaled_out": False,  # TP1 (50% at EMA reversion) taken?
+            "tp2_hit": False,  # TP2 (25% at target R) taken?
             "chandelier_high": price,  # highest price since entry (for trailing)
         }
         self.positions[asset_key] = position
@@ -1521,10 +1633,11 @@ class TradingLoop:
         price_data: dict,
         market_ctx: dict = None,
         partial: bool = False,
+        slice_pct: float = None,
     ):
         """Close a paper position and log the trade.
 
-        If partial=True, closes 50% of position (scale-out TP1) and keeps remaining open.
+        If partial=True, closes `slice_pct` (default 50%) of position and keeps remaining open.
         Otherwise closes the full position.
         """
         position = self.positions.get(asset_key)
@@ -1536,7 +1649,8 @@ class TradingLoop:
         exit_ctx = market_ctx or self._current_market_context()
         full_ctx = {**entry_ctx, **{"exit_" + k: v for k, v in exit_ctx.items()}}
 
-        close_size = position["position_size_r"] * (0.5 if partial else 1.0)
+        slice_ratio = slice_pct if slice_pct is not None else (0.5 if partial else 1.0)
+        close_size = position["position_size_r"] * slice_ratio
 
         # ── Paper fidelity: Fee + Funding PnL adjustments ──
         TAKER_FEE_RATE = 0.00025  # Hyperliquid standard taker fee (0.025%)
@@ -1587,8 +1701,11 @@ class TradingLoop:
         }
 
         if partial:
-            position["position_size_r"] = close_size  # reduced to remaining 50%
-            position["scaled_out"] = True
+            position["position_size_r"] = position["position_size_r"] * (1 - slice_ratio)
+            if reason == "scale_out_tp1":
+                position["scaled_out"] = True
+            elif reason == "tp2":
+                position["tp2_hit"] = True
         else:
             self.positions[asset_key] = None
 

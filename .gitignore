@@ -1,36 +1,16 @@
-# Python
+node_modules/
+.next/
+coverage/
+.DS_Store
+*.log
+.env*
+!.env.example
 __pycache__/
-*.py[cod]
-*.so
-.venv/
-venv/
+*.pyc
 *.egg-info/
-
-# Runtime data
+hermes-ui/out/
+hermes-ui/.next/
 state/
 data/
-*.db
-*.db-shm
-*.db-wal
-
-# Environment & secrets
-.env
-*.env.local
-.deploy_key
-
-# IDE & OS
-.DS_Store
-.vscode/
-.idea/
-*.swp
-*.swo
-*~
-
-# Logs
-*.log
-/tmp/
-
-# Auto-generated
-models_dev_cache.json
-daily_readiness_report_*.md
 backtest_state/
+scripts/__pycache__/

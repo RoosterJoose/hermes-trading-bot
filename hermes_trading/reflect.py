@@ -364,6 +364,22 @@ def summarize(state_dir: Path, asset_key: str, goal: dict, trades: list) -> str:
         lines.append(f"   Avg Win: {avg_win:+.2f}% | Avg Loss: {avg_loss:+.2f}%")
         lines.append(f"   Best Trade: {max_win:+.2f}% | Worst Trade: {max_loss:+.2f}%")
 
+        # R-multiple distribution
+        sl_pct = current.get("stop_loss_pct", 2.0) if current else 2.0
+        r_multiples = [p / sl_pct if sl_pct else 0 for p in pnls] if sl_pct else []
+        zero_r = sum(1 for r in r_multiples if abs(r) < 0.1)
+        small_r = sum(1 for r in r_multiples if 0.1 <= abs(r) < 0.5)
+        mid_r = sum(1 for r in r_multiples if 0.5 <= abs(r) < 1.5)
+        big_r = sum(1 for r in r_multiples if abs(r) >= 1.5)
+        avg_r = sum(r_multiples) / len(r_multiples) if r_multiples else 0
+        win_r = [r for r in r_multiples if r > 0]
+        loss_r = [r for r in r_multiples if r < 0]
+        lines.append(f"\n📐 R-Multiple Distribution (stop={sl_pct}%):")
+        lines.append(f"   Avg R: {avg_r:.2f} | Win R: {sum(win_r) / len(win_r):.2f} ({len(win_r)} wins)" if win_r else f"   Avg R: {avg_r:.2f} | Win R: N/A")
+        lines.append(f"   Loss R: {sum(loss_r) / len(loss_r):.2f} ({len(loss_r)} losses)" if loss_r else f"   Loss R: N/A")
+        lines.append(f"   ~0R: {zero_r} | ±0.1-0.5R: {small_r} | ±0.5-1.5R: {mid_r} | ±1.5R+: {big_r}")
+        lines.append(f"   ⚠️  If most trades cluster at ~0R, exit is the problem — add/modify exit params")
+
         # Recent trades
         lines.append(f"\n📈 Recent Trades (last 5):")
         for t in trades[-5:]:
@@ -503,7 +519,23 @@ def summarize(state_dir: Path, asset_key: str, goal: dict, trades: list) -> str:
             f"   - evaluator.volume_spike_mult (current: {ev.get('volume_spike_mult', 1.5)})"
         )
         lines.append(
-            f"   - evaluator.min_candle_position (current: {ev.get('min_candle_position', 0.3)})"
+            f"   - evaluator.min_candle_position (current: {ev.get('min_candle_position', 0.3)})\n"
+        )
+        exit_min_r = current.get("scale_out_min_R", 0.3)
+        lines.append(
+            f"   - scale_out_min_R (current: {exit_min_r}) — minimum R before TP1 fires"
+        )
+        lines.append(
+            f"   - tp2_target_R (current: {current.get('tp2_target_R', 1.5)}) — R target for TP2 slice"
+        )
+        lines.append(
+            f"   - tp2_slice (current: {current.get('tp2_slice', 0.5)}) — fraction of remaining at TP2"
+        )
+        lines.append(
+            f"   - chandelier_mult_alts (current: {current.get('chandelier_mult_alts', 4.0)}) — alt trailing tightness"
+        )
+        lines.append(
+            f"   - chandelier_mult_major (current: {current.get('chandelier_mult_major', 2.5)}) — BTC/ETH trailing tightness"
         )
     lines.append(f"\n⚠️ RULE: Change EXACTLY ONE variable per cycle. No exceptions.")
 
@@ -641,6 +673,48 @@ def _gatekeeper(
         current_value = strategy.get("btc_gate", {}).get("min_btc_4h_rsi", 25)
         proposed_value = min(45, current_value + 5)
 
+    elif "scale_out" in action or "tp2_target" in action or "chandelier_mult" in action:
+        change_type = "exit_params"
+        if completed_trades < 10:
+            return {
+                "approved": False,
+                "reason": f"Need 10+ completed trades for exit-param changes (have {completed_trades})",
+            }
+        # Bounded per-cycle limits
+        if "scale_out" in action:
+            key = "scale_out_min_R"
+            cur = strategy.get(key, 0.3)
+            prop = strategy.get(key, 0.3)
+            limit = 0.3
+        elif "tp2" in action:
+            key = "tp2_target_R"
+            cur = strategy.get(key, 1.5)
+            prop = strategy.get(key, 1.5)
+            limit = 0.5
+        else:
+            key = "chandelier_mult_alts" if "alts" in action else "chandelier_mult_major"
+            cur = strategy.get(key, 4.0 if "alts" in action else 2.5)
+            prop = strategy.get(key, 4.0 if "alts" in action else 2.5)
+            limit = 1.0
+        delta = abs(prop - cur)
+        if delta > limit:
+            return {
+                "approved": False,
+                "reason": f"{key} change of {delta:.2f} exceeds {limit} per-cycle limit",
+            }
+        # Don't lower exit thresholds if recent trades include large winners
+        if "lower" in action or "reduce" in action:
+            state_dir = BASE_DIR / "state"
+            tc = load_trades(state_dir, asset_key)
+            recent_tc = filter_recent_trades(tc)
+            if recent_tc:
+                max_win = max((t.get("pnl_pct", 0) for t in recent_tc), default=0)
+                if max_win > 1.0:
+                    return {
+                        "approved": False,
+                        "reason": f"Recent max win {max_win:+.2f}% — lowering exits would cap winners",
+                    }
+
     # ── Rule 1: Asset-level risk changes need 30+ completed trades ──
     if change_type == "stop_loss" and completed_trades < 30:
         return {
@@ -770,6 +844,16 @@ def fallback_reflect(state_dir: Path, asset_key: str, goal: dict, trades: list):
     if regime_shift:
         print(f"   ⚠️  REGIME SHIFT: {clustering['message']}")
 
+    # P2: Exit quality check — trades clustering at ~0R means exit is broken
+    pnls = [t.get("pnl_pct", 0) for t in trades if t.get("pnl_pct") is not None]
+    sl_pct = strategy.get("stop_loss_pct", 2.0)
+    r_multiples = [p / sl_pct for p in pnls if sl_pct]
+    zero_r_pct = sum(1 for r in r_multiples if abs(r) < 0.15) / len(r_multiples) * 100 if r_multiples else 0
+    avg_r = sum(r_multiples) / len(r_multiples) if r_multiples else 0
+    exit_problem = zero_r_pct > 55 and len(r_multiples) >= 8 and overall < 0.1
+    if exit_problem:
+        print(f"   ⚠️  EXIT PROBLEM: {zero_r_pct:.0f}% of trades at ~0R (avg R={avg_r:.2f})")
+
     # Decision tree — start with the most impactful adjustment
     if overall < 0:
         # Underperforming — diagnose
@@ -802,6 +886,17 @@ def fallback_reflect(state_dir: Path, asset_key: str, goal: dict, trades: list):
                 f"(avg {worst_pattern['avg_pnl']:+.2f}%). "
                 f"Raised BTC 4h min RSI from {current_min} to {strategy['btc_gate']['min_btc_4h_rsi']}"
             )
+        elif exit_problem:
+            # Exit quality is the root cause — fix exit params
+            current_min_r = strategy.get("scale_out_min_R", 0.3)
+            new_min_r = round(min(1.0, current_min_r + 0.15), 2)
+            strategy["scale_out_min_R"] = new_min_r
+            hypothesis["action"] = "raise_scale_out_min_R"
+            hypothesis["reasoning"] = (
+                f"EXIT PROBLEM: {zero_r_pct:.0f}% of trades exit near ~0R. "
+                f"TP1 fires at EMA cross without profit. Raised scale_out_min_R from "
+                f"{current_min_r} to {new_min_r} to let runners develop."
+            )
         else:
             # Generic: loosen entry threshold to catch more signals
             current_threshold = strategy.get("entry", {}).get("threshold", 30)
@@ -813,21 +908,56 @@ def fallback_reflect(state_dir: Path, asset_key: str, goal: dict, trades: list):
 
     elif overall > 0.3:
         # Overperforming — take a bit more risk
-        current_sl = strategy.get("stop_loss_pct", 2.0)
-        strategy["stop_loss_pct"] = round(min(5.0, current_sl + 0.1), 2)
-        hypothesis["action"] = "widen_stop_loss"
-        hypothesis["reasoning"] = (
-            f"Good performance. Widened stop_loss_pct from {current_sl} to {strategy['stop_loss_pct']} to capture more upside"
-        )
+        if exit_problem and zero_r_pct > 40:
+            # Exit still contains ~0R trades — reduce min_R guard
+            current_min_r = strategy.get("scale_out_min_R", 0.3)
+            new_min_r = round(max(0.1, current_min_r - 0.1), 2)
+            strategy["scale_out_min_R"] = new_min_r
+            hypothesis["action"] = "lower_scale_out_min_R"
+            hypothesis["reasoning"] = (
+                f"Performance good but {zero_r_pct:.0f}% of trades at ~0R. "
+                f"Lowered scale_out_min_R from {current_min_r} to {new_min_r} "
+                f"to avoid over-constraining TP1."
+            )
+        else:
+            current_sl = strategy.get("stop_loss_pct", 2.0)
+            strategy["stop_loss_pct"] = round(min(5.0, current_sl + 0.1), 2)
+            hypothesis["action"] = "widen_stop_loss"
+            hypothesis["reasoning"] = (
+                f"Good performance. Widened stop_loss_pct from {current_sl} to {strategy['stop_loss_pct']} to capture more upside"
+            )
 
     else:
-        # Neutral performance — tighten threshold slightly
-        current_threshold = strategy.get("entry", {}).get("threshold", 30)
-        strategy["entry"]["threshold"] = max(20, current_threshold - 1)
-        hypothesis["action"] = "tighten_entry_slightly"
-        hypothesis["reasoning"] = (
-            f"Neutral performance. Tightened entry.threshold from {current_threshold} to {strategy['entry']['threshold']}"
-        )
+        # Neutral performance — diagnose
+        if exit_problem:
+            # Still have exit problem — raise scale_out_min_R
+            current_min_r = strategy.get("scale_out_min_R", 0.3)
+            new_min_r = round(min(1.2, current_min_r + 0.1), 2)
+            strategy["scale_out_min_R"] = new_min_r
+            hypothesis["action"] = "raise_scale_out_min_R"
+            hypothesis["reasoning"] = (
+                f"Neutral score but exit quality poor ({zero_r_pct:.0f}% of trades ~0R). "
+                f"Raised scale_out_min_R from {current_min_r} to {new_min_r}."
+            )
+        elif avg_r < 0.5:
+            # Trades don't run far enough — check tp2_target_R
+            current_tp2 = strategy.get("tp2_target_R", 1.5)
+            new_tp2 = round(max(0.8, current_tp2 - 0.3), 2)
+            strategy["tp2_target_R"] = new_tp2
+            hypothesis["action"] = "lower_tp2_target_R"
+            hypothesis["reasoning"] = (
+                f"Avg R={avg_r:.2f} — trades not reaching targets. "
+                f"Lowered tp2_target_R from {current_tp2} to {new_tp2} "
+                f"to make TP2 more achievable."
+            )
+        else:
+            # Tighten threshold slightly
+            current_threshold = strategy.get("entry", {}).get("threshold", 30)
+            strategy["entry"]["threshold"] = max(20, current_threshold - 1)
+            hypothesis["action"] = "tighten_entry_slightly"
+            hypothesis["reasoning"] = (
+                f"Neutral performance. Tightened entry.threshold from {current_threshold} to {strategy['entry']['threshold']}"
+            )
 
     strategy["version"] = new_ver
 
@@ -859,6 +989,10 @@ def fallback_reflect(state_dir: Path, asset_key: str, goal: dict, trades: list):
         "cooldown_cycles": strategy.get("cooldown_cycles"),
         "btc_min_4h_rsi": strategy.get("btc_gate", {}).get("min_btc_4h_rsi"),
         "fng_min_value": strategy.get("fng_gate", {}).get("min_value"),
+        "scale_out_min_R": strategy.get("scale_out_min_R"),
+        "tp2_target_R": strategy.get("tp2_target_R"),
+        "chandelier_mult_alts": strategy.get("chandelier_mult_alts"),
+        "chandelier_mult_major": strategy.get("chandelier_mult_major"),
     }
 
     write_strategy(state_dir, asset_key, strategy)
