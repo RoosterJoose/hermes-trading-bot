@@ -69,6 +69,29 @@ def main():
 
 
 def _main_impl():
+    # ── Duplicate-instance protection ──
+    LOCK_FILE = str(STATE_DIR / "bot.lock")
+    try:
+        if os.path.exists(LOCK_FILE):
+            with open(LOCK_FILE) as f:
+                old_pid = int(f.read().strip())
+            try:
+                os.kill(old_pid, 0)
+                # Check it's not a zombie
+                stat_path = f"/proc/{old_pid}/stat"
+                if os.path.exists(stat_path):
+                    stat = open(stat_path).read().split()
+                    if len(stat) > 2 and stat[2] != 'Z':
+                        print(f"❌ Bot already running (PID {old_pid}). Refusing to start duplicate.")
+                        sys.exit(1)
+            except (ProcessLookupError, OSError):
+                pass  # Stale lock, proceed
+        # Write our PID to lock file
+        with open(LOCK_FILE, "w") as f:
+            f.write(str(os.getpid()))
+    except OSError as e:
+        print(f"⚠️  Could not write lock file: {e}")
+
     parser = argparse.ArgumentParser(description="Hermes Trading Worker")
     parser.add_argument("--mode", choices=["paper", "live"], default="paper")
     parser.add_argument(

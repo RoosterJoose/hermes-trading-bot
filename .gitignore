@@ -24,3 +24,4 @@ data/
 backtest_state/
 scripts/__pycache__/
 crash.log
+pids/
