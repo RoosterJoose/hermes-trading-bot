@@ -134,6 +134,16 @@ class TradingLoop:
         }  # bool: True=win, False=loss
         self.portfolio_trade_results: list = []  # global rolling trade outcomes
 
+        # BTC correlation sector cap — rolling 1h return correlation per asset
+        self._btc_correlations: Dict[str, float] = {}  # asset_key → rolling Pearson r
+        self._btc_hourly_return_log: list = []  # rolling 24 entries of BTC 1h returns
+        self._asset_hourly_return_logs: Dict[str, list] = {
+            a["key"]: [] for a in assets
+        }  # asset_key → [24 1h returns]
+        self._last_corr_update: float = 0  # timestamp of last correlation update
+        self._last_btc_price_for_corr: Optional[float] = None
+        self._last_asset_prices_for_corr: Dict[str, float] = {}
+
         # ADX danger zone gate (resamples 1m to 15m/1h, checks ADX + EMA200)
         self.adx_danger_blocked: Dict[str, bool] = {a["key"]: False for a in assets}
 
@@ -326,6 +336,9 @@ class TradingLoop:
                     self._event_cal_blackout = None
                     self._event_cal_warned = False
 
+                # Update BTC correlation matrix (sector cap data) once per ~hour
+                self._update_btc_correlations(self.btc_context)
+
                 # ── Cycle through each asset ──
                 for asset_cfg in self.assets:
                     key = asset_cfg["key"]
@@ -473,16 +486,8 @@ class TradingLoop:
             (allowed: bool, reason: str)
         """
         btc_gate = strategy.get("btc_gate", {})
-        btc_4h_min_rsi = btc_gate.get("min_btc_4h_rsi", 25)
 
-        btc_4h_rsi = self.btc_context.get("btc_4h_rsi")
         btc_1h_rsi = self.btc_context.get("btc_1h_rsi")
-
-        if btc_4h_rsi is not None and btc_4h_rsi < btc_4h_min_rsi:
-            return (
-                False,
-                f"BTC 4h RSI {btc_4h_rsi:.0f} < {btc_4h_min_rsi} (too bearish)",
-            )
 
         if btc_1h_rsi is not None and btc_1h_rsi < btc_gate.get("min_btc_1h_rsi", 20):
             return (
@@ -1914,6 +1919,116 @@ class TradingLoop:
 
     # ── Step 5: Kill Switches ─────────────────────────────────────────────
 
+    def _update_btc_correlations(self, price_data: dict):
+        """Update rolling 1h return correlation between BTC and each asset.
+
+        Samples 1h returns once per ~60 cycles (~1h), stores rolling 24-entry
+        logs, and computes Pearson correlation. Used by sector cap in kill switch.
+        """
+        import time
+        now = time.time()
+        # Update at most once per 50 cycles (~50 min) to avoid redundant compute
+        if now - self._last_corr_update < 3000:  # 50 min cooldown
+            return
+        self._last_corr_update = now
+
+        btc_price = self.btc_context.get("btc_price", 0)
+        if btc_price <= 0:
+            return
+
+        # Get current price for each asset from price_data
+        cur_prices = {}
+        if price_data:
+            cur_prices["BTC_USDT"] = btc_price
+            for asset_key in self.assets:
+                k = asset_key["key"]
+                # Try to get from stored context
+                if k == "BTC_USDT":
+                    continue
+                cur_prices[k] = btc_price * 0.999  # fallback — will be updated by cycle
+
+        # Compute this hour's return for BTC
+        if len(self._btc_hourly_return_log) > 0:
+            prev_btc = self._last_btc_price_for_corr
+            if prev_btc and prev_btc > 0:
+                btc_return = (btc_price - prev_btc) / prev_btc
+                self._btc_hourly_return_log.append(btc_return)
+                if len(self._btc_hourly_return_log) > 24:
+                    self._btc_hourly_return_log.pop(0)
+
+                # Compute returns for each asset using same 1h window
+                for asset_key in self.assets:
+                    k = asset_key["key"]
+                    if k == "BTC_USDT":
+                        continue
+                    # Use the current cycle data from positions or fallback price
+                    pos = self.positions.get(k)
+                    cur = (pos.get("current_price", 0) if pos else 0)
+                    if cur <= 0:
+                        continue
+                    prev = self._last_asset_prices_for_corr.get(k)
+                    if prev and prev > 0:
+                        asset_return = (cur - prev) / prev
+                        log = self._asset_hourly_return_logs[k]
+                        log.append(asset_return)
+                        if len(log) > 24:
+                            log.pop(0)
+
+        self._last_btc_price_for_corr = btc_price
+        self._last_asset_prices_for_corr = cur_prices
+
+        # Compute Pearson correlation for each asset with >= 12 data points
+        btc_log = self._btc_hourly_return_log
+        if len(btc_log) >= 12:
+            import statistics
+            btc_mean = statistics.mean(btc_log)
+            btc_stdev = statistics.stdev(btc_log) if len(btc_log) > 1 else 1
+            for asset_key in self.assets:
+                k = asset_key["key"]
+                if k == "BTC_USDT":
+                    self._btc_correlations[k] = 1.0
+                    continue
+                log = self._asset_hourly_return_logs[k]
+                if len(log) >= 12 and len(log) == len(btc_log):
+                    # Trim to same length
+                    n = min(len(log), len(btc_log))
+                    a = log[-n:]
+                    b = btc_log[-n:]
+                    try:
+                        a_mean = statistics.mean(a)
+                        b_mean = statistics.mean(b)
+                        num = sum((x - a_mean) * (y - b_mean) for x, y in zip(a, b))
+                        den = (sum((x - a_mean) ** 2 for x in a) ** 0.5
+                               * sum((y - b_mean) ** 2 for y in b) ** 0.5)
+                        r = num / den if den != 0 else 0
+                        self._btc_correlations[k] = round(r, 4)
+                    except (statistics.StatisticsError, ZeroDivisionError):
+                        pass
+
+    def _correlation_sector_allows_entry(self, asset_key: str) -> tuple:
+        """Sector cap: max 2 open positions sharing BTC-beta > 0.7.
+        
+        Returns (allowed: bool, reason: str).
+        """
+        asset_r = self._btc_correlations.get(asset_key, 0)
+        if asset_r < 0.7:
+            return (True, "")  # Low-BTC-beta asset, no cap applied
+
+        # Count open positions with high BTC correlation
+        high_beta_count = 0
+        for k, pos in self.positions.items():
+            if pos is not None and k != asset_key:
+                pos_r = self._btc_correlations.get(k, 0)
+                if pos_r >= 0.7:
+                    high_beta_count += 1
+
+        if high_beta_count >= 2:
+            return (
+                False,
+                f"SECTOR CAP: {asset_key} (β={asset_r:.2f}) + {high_beta_count} high-β open ≥ 2",
+            )
+        return (True, "")
+
     def _kill_switch_allows_entry(
         self, asset_key: str, strategy: dict, candles: list = None
     ) -> tuple:
@@ -1983,6 +2098,11 @@ class TradingLoop:
                     False,
                     f"KILL: {asset_key.split('_')[0]} spread {avg_spread:.4f}% > 0.08%",
                 )
+
+        # BTC correlation sector cap: max 2 high-β positions concurrently
+        sector_allowed, sector_reason = self._correlation_sector_allows_entry(asset_key)
+        if not sector_allowed:
+            return (False, f"KILL: {sector_reason}")
 
         return (True, "")
 
@@ -2640,7 +2760,7 @@ class TradingLoop:
         "stop_loss_pct": set(),
         "position_size_r": set(),
         "cooldown_cycles": set(),
-        "btc_gate": {"min_btc_4h_rsi", "min_btc_1h_rsi"},
+        "btc_gate": {"min_btc_1h_rsi"},
         "fng_gate": {"min_value"},
         "hurst": {"enabled"},
         "kill_switches": {"enabled", "max_open_positions"},

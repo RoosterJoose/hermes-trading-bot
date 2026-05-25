@@ -339,7 +339,7 @@ def summarize(state_dir: Path, asset_key: str, goal: dict, trades: list) -> str:
         lines.append(f"   Cooldown: {current.get('cooldown_cycles', 30)} cycles")
         btc = current.get("btc_gate", {})
         lines.append(
-            f"   BTC Gate: 4h min RSI {btc.get('min_btc_4h_rsi', 25)} | 1h min RSI {btc.get('min_btc_1h_rsi', 20)}"
+            f"   BTC Gate: 1h min RSI {btc.get('min_btc_1h_rsi', 20)}"
         )
         fng = current.get("fng_gate", {})
         lines.append(f"   FnG Gate: min value {fng.get('min_value', 10)}")
@@ -469,7 +469,7 @@ def summarize(state_dir: Path, asset_key: str, goal: dict, trades: list) -> str:
             btc_gate_str = ""
             btc_g = hist.get("btc_gate", {})
             if btc_g:
-                btc_gate_str = f" btc4h>{btc_g.get('min_btc_4h_rsi', '?')}"
+                btc_gate_str = f" btc1h>{btc_g.get('min_btc_1h_rsi', '?')}"
             fng_str = ""
             fng_g = hist.get("fng_gate", {})
             if fng_g:
@@ -501,9 +501,6 @@ def summarize(state_dir: Path, asset_key: str, goal: dict, trades: list) -> str:
         )
         lines.append(
             f"   - cooldown_cycles (current: {current.get('cooldown_cycles', 30)})"
-        )
-        lines.append(
-            f"   - btc_gate.min_btc_4h_rsi (current: {current.get('btc_gate', {}).get('min_btc_4h_rsi', 25)})"
         )
         lines.append(
             f"   - btc_gate.min_btc_1h_rsi (current: {current.get('btc_gate', {}).get('min_btc_1h_rsi', 20)})"
@@ -670,7 +667,7 @@ def _gatekeeper(
 
     elif "btc_gate" in action:
         change_type = "btc_gate"
-        current_value = strategy.get("btc_gate", {}).get("min_btc_4h_rsi", 25)
+        current_value = strategy.get("btc_gate", {}).get("min_btc_1h_rsi", 20)
         proposed_value = min(45, current_value + 5)
 
     elif "scale_out" in action or "tp2_target" in action or "chandelier_mult" in action:
@@ -876,15 +873,15 @@ def fallback_reflect(state_dir: Path, asset_key: str, goal: dict, trades: list):
                 f"Drawdown exceeded limit. Tightened stop_loss_pct from {current_sl} to {strategy['stop_loss_pct']}"
             )
         elif worst_pattern and "BTC" in worst_pattern.get("condition", ""):
-            # Losses correlate with BTC conditions — tighten BTC gate
-            current_min = strategy.get("btc_gate", {}).get("min_btc_4h_rsi", 25)
+            # Losses correlate with BTC conditions — tighten BTC 1h gate
+            current_min = strategy.get("btc_gate", {}).get("min_btc_1h_rsi", 20)
             strategy.setdefault("btc_gate", {})
-            strategy["btc_gate"]["min_btc_4h_rsi"] = min(45, current_min + 5)
+            strategy["btc_gate"]["min_btc_1h_rsi"] = min(40, current_min + 5)
             hypothesis["action"] = "tighten_btc_gate"
             hypothesis["reasoning"] = (
                 f"Losses cluster in {worst_pattern['condition']} "
                 f"(avg {worst_pattern['avg_pnl']:+.2f}%). "
-                f"Raised BTC 4h min RSI from {current_min} to {strategy['btc_gate']['min_btc_4h_rsi']}"
+                f"Raised BTC 1h min RSI from {current_min} to {strategy['btc_gate']['min_btc_1h_rsi']}"
             )
         elif exit_problem:
             # Exit quality is the root cause — fix exit params
@@ -987,7 +984,7 @@ def fallback_reflect(state_dir: Path, asset_key: str, goal: dict, trades: list):
         "entry_threshold": strategy.get("entry", {}).get("threshold"),
         "stop_loss_pct": strategy.get("stop_loss_pct"),
         "cooldown_cycles": strategy.get("cooldown_cycles"),
-        "btc_min_4h_rsi": strategy.get("btc_gate", {}).get("min_btc_4h_rsi"),
+        "btc_min_1h_rsi": strategy.get("btc_gate", {}).get("min_btc_1h_rsi"),
         "fng_min_value": strategy.get("fng_gate", {}).get("min_value"),
         "scale_out_min_R": strategy.get("scale_out_min_R"),
         "tp2_target_R": strategy.get("tp2_target_R"),

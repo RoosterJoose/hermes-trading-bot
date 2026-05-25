@@ -10,7 +10,14 @@ __pycache__/
 *.egg-info/
 hermes-ui/out/
 hermes-ui/.next/
-state/
+state/*.json
+state/*.jsonl
+state/*.txt
+state/*/trades.jsonl
+state/*/hypotheses.jsonl
+state/*/rejections.jsonl
+state/*/history/
+state/*/analytics/
 data/
 backtest_state/
 scripts/__pycache__/

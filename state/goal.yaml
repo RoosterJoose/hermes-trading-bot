@@ -1,0 +1,50 @@
+assets:
+- key: BTC_USDT
+  target_return_30d: 0.1
+  max_drawdown: 0.05
+  min_sharpe: 1.0
+- key: ETH_USDT
+  target_return_30d: 0.1
+  max_drawdown: 0.05
+  min_sharpe: 1.0
+- key: BNB_USDT
+  target_return_30d: 0.1
+  max_drawdown: 0.05
+  min_sharpe: 1.0
+- key: SOL_USDT
+  target_return_30d: 0.1
+  max_drawdown: 0.05
+  min_sharpe: 1.2
+- key: XRP_USDT
+  target_return_30d: 0.1
+  max_drawdown: 0.05
+  min_sharpe: 1.2
+- key: DOGE_USDT
+  target_return_30d: 0.15
+  max_drawdown: 0.08
+  min_sharpe: 1.0
+- key: ADA_USDT
+  target_return_30d: 0.1
+  max_drawdown: 0.05
+  min_sharpe: 1.0
+- key: AVAX_USDT
+  target_return_30d: 0.1
+  max_drawdown: 0.05
+  min_sharpe: 1.0
+- key: LINK_USDT
+  target_return_30d: 0.1
+  max_drawdown: 0.05
+  min_sharpe: 1.0
+- key: DOT_USDT
+  target_return_30d: 0.1
+  max_drawdown: 0.05
+  min_sharpe: 1.0
+failure_below: -0.04
+initial_balance: 1000
+reflection_every: 5
+one_variable_only: true
+event_calendar:
+  enabled: true
+  flatten_minutes_before: 120
+  hold_minutes_after: 60
+  custom_events: []
