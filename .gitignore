@@ -26,3 +26,9 @@ scripts/__pycache__/
 crash.log
 pids/
 state/bot.lock
+state/runtime.json
+state/runtime.json.tmp
+state/version.json
+state/session_start_balance.txt
+state/session_start_balance.json
+state/manual_intervention_required

@@ -21,6 +21,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Optional
 
+from hermes_trading import state as hm_state
+
 from hermes_trading.adaptive import (
     compute_dynamic_rsi_threshold,
     compute_hurst_exponent,
@@ -179,6 +181,30 @@ class TradingLoop:
         # Replay historical trades into paper balance (survives crashes/restarts)
         self._replay_historical_trades()
 
+        # Session start balance — persists across crashes so daily PnL kill-switch survives
+        # Format: JSON with date field ({"date": "2026-05-25", "balance": 962.36})
+        # If stored date doesn't match today, session resets (handles crash across UTC midnight)
+        ssf = self.state_dir / "session_start_balance.json"
+        if ssf.exists():
+            try:
+                import json as _json
+                data = _json.loads(ssf.read_text())
+                stored_date = data.get("date", "")
+                stored_balance = float(data.get("balance", self.initial_balance))
+                today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+                if stored_date == today:
+                    self.session_start_balance = stored_balance
+                else:
+                    # Date mismatch — new UTC day since last write (or crash across midnight)
+                    self.session_start_balance = self.paper_balance
+                    hm_state.atomic_write_json(ssf, {"date": today, "balance": round(self.session_start_balance, 2)})
+            except (ValueError, OSError, _json.JSONDecodeError):
+                self.session_start_balance = self.paper_balance
+                hm_state.atomic_write_json(ssf, {"date": datetime.now(timezone.utc).strftime("%Y-%m-%d"), "balance": round(self.session_start_balance, 2)})
+        else:
+            self.session_start_balance = self.paper_balance
+            hm_state.atomic_write_json(ssf, {"date": datetime.now(timezone.utc).strftime("%Y-%m-%d"), "balance": round(self.session_start_balance, 2)})
+
         # Trust-state scaling (unified risk score)
         self.trust_multiplier: float = 1.0
         self.trust_label: str = "high"
@@ -313,11 +339,20 @@ class TradingLoop:
                 # Check if we've crossed into a new UTC day (daily PnL reset cycle)
                 today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
                 if today != self.last_daily_reset:
-                    # New UTC day — clear both halt and latch
+                    # New UTC day — clear both halt and latch, persist session_start_balance
                     if self.portfolio_halt_latched:
                         print(f"📅 New UTC day ({today}) — portfolio halt latch cleared")
                     self.portfolio_loss_halted = False
                     self.portfolio_halt_latched = False
+                    # Persist new session start balance for crash survival
+                    self.session_start_balance = self.paper_balance
+                    try:
+                        hm_state.atomic_write_json(
+                            self.state_dir / "session_start_balance.json",
+                            {"date": today, "balance": round(self.session_start_balance, 2)},
+                        )
+                    except OSError:
+                        pass
 
                 # Trigger halt if daily loss exceeds threshold
                 if (
@@ -374,6 +409,7 @@ class TradingLoop:
                     )
 
                 self._write_heartbeat()
+                self._write_runtime()
                 await asyncio.sleep(self.cycle_interval)
 
         finally:
@@ -3081,5 +3117,9 @@ class TradingLoop:
             },
         }
         hb_file = self.state_dir / "heartbeat.json"
-        with open(hb_file, "w") as f:
-            json.dump(heartbeat, f, indent=2)
+        hm_state.atomic_write_json(hb_file, heartbeat)
+
+    def _write_runtime(self):
+        """Write consolidated runtime state to state/runtime.json atomically."""
+        runtime = hm_state.build_from_loop(self)
+        hm_state.write_runtime(self.state_dir, runtime)

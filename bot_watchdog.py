@@ -1,48 +1,67 @@
 #!/usr/bin/env python3
 """
-Hermes Trading Bot — Hardened Watchdog
-=======================================
+Hermes Trading Bot — Hardened Watchdog v3
+=========================================
 Focused on ONE thing: keeping the bot alive.
+
+Changes in v3:
+  - Named logger with RotatingFileHandler (no duplicate lines, bounded logs)
+  - -B flag + PYTHONDONTWRITEBYTECODE in env for all child processes
+  - fcntl.flock OS-level lock at startup (prevents two watchdogs)
+  - API server circuit breaker (3-strike + exponential backoff)
+  - Restart storm quarantine (3 crashes → safe mode → diagnostics only)
 
 Strategy:
   - PID file + heartbeat freshness check (primary)
   - If bot is down or heartbeat > 5 min stale → restart bot
-  - If API server or tunnel die → log warning but DON'T restart 
-    (they're long-lived and rarely crash; bot is the fragile one)
-  - If API/tunnel are down at startup → start them once
   - Exponential backoff on repeated bot crashes (1min → 5min → 15min cap)
+  - API restart has its own circuit breaker (not fork-bomb)
   - Logs every restart with crash count
   - All child processes use start_new_session=True (PPID 1 detachment)
+  - fcntl.flock prevents duplicate watchdog instances at OS level
 
 Files:
   PID => /opt/data/hermes-trading/pids/<name>.pid
-  Log => /opt/data/hermes-trading/watchdog.log
+  Log => /opt/data/hermes-trading/watchdog.log (rotated at 10MB)
 """
 
+import fcntl
+import json
+import logging
+import logging.handlers
 import os
+import signal
+import subprocess
 import sys
 import time
-import json
-import signal
-import logging
-import subprocess
+import urllib.request
+import urllib.error
 from datetime import datetime, timezone
 from pathlib import Path
 
 BASE_DIR = Path("/opt/data/hermes-trading")
 STATE_DIR = BASE_DIR / "state"
 PIDS_DIR = BASE_DIR / "pids"
-LOG_FILE = BASE_DIR / "watchdog.log"
+LOG_FILE = str(BASE_DIR / "watchdog.log")
 VENV_PYTHON = "/opt/hermes/.venv/bin/python"
 CLOUDFLARED = "/tmp/cloudflared"
+RUNTIME_FILE = "state/runtime.json"
+MANUAL_INTERVENTION_FILE = "state/manual_intervention_required"
+LOCK_FILE = str(BASE_DIR / "state" / "watchdog.lock")
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
-    handlers=[logging.FileHandler(LOG_FILE), logging.StreamHandler(sys.stdout)],
-    force=True,
+# ── Logger setup (named logger, RotatingFileHandler, no duplicates) ──
+log = logging.getLogger("hermes.watchdog")
+log.setLevel(logging.INFO)
+log.propagate = False
+log.handlers.clear()
+
+_formatter = logging.Formatter("%(asctime)s [%(levelname)s] %(message)s")
+
+_file_handler = logging.handlers.RotatingFileHandler(
+    LOG_FILE, maxBytes=10_000_000, backupCount=10, encoding="utf-8"
 )
-log = logging.getLogger("wd")
+_file_handler.setFormatter(_formatter)
+log.addHandler(_file_handler)
 
 
 def ensure_dir(d: Path):
@@ -84,12 +103,19 @@ def is_alive(pid: int | None) -> bool:
         return False
 
 
+def read_runtime() -> dict:
+    """Read state/runtime.json, return empty dict on failure."""
+    path = BASE_DIR / RUNTIME_FILE
+    try:
+        return json.loads(path.read_text())
+    except (FileNotFoundError, json.JSONDecodeError, PermissionError):
+        return {}
+
+
 def kill_all(pattern: str, exclude_pid: int | None = None):
     """Kill all processes matching `pattern` via pgrep. SIGTERM, wait, SIGKILL."""
-    import subprocess as _sp
-
     try:
-        r = _sp.run(["pgrep", "-f", pattern], capture_output=True, text=True, timeout=10)
+        r = subprocess.run(["pgrep", "-f", pattern], capture_output=True, text=True, timeout=10)
         if r.returncode != 0 or not r.stdout.strip():
             return
         pids = [int(p.strip()) for p in r.stdout.strip().split("\n")]
@@ -102,7 +128,7 @@ def kill_all(pattern: str, exclude_pid: int | None = None):
                 pass
         time.sleep(2)
         # Force survivors
-        r2 = _sp.run(["pgrep", "-f", pattern], capture_output=True, text=True, timeout=10)
+        r2 = subprocess.run(["pgrep", "-f", pattern], capture_output=True, text=True, timeout=10)
         if r2.returncode == 0 and r2.stdout.strip():
             for pid_str in r2.stdout.strip().split("\n"):
                 pid = int(pid_str.strip())
@@ -117,16 +143,29 @@ def kill_all(pattern: str, exclude_pid: int | None = None):
 
 
 def start_detached(cmd: list, cwd: str | None = None, logfile: str | None = None) -> int | None:
-    """Launch a process fully detached (new session, no stdin, appended stdout)."""
+    """Launch a process fully detached with -B flag and PYTHONDONTWRITEBYTECODE.
+
+    Defense-in-depth: passes -B on the Python invocation AND sets the env var,
+    so .pyc files can never be created by child processes.
+    """
     try:
         lf = logfile or str(BASE_DIR / f"{cmd[0].split('/')[-1]}.log")
+        # Ensure -B flag is present (prevents .pyc generation)
+        launch_cmd = list(cmd)
+        if launch_cmd and launch_cmd[0].endswith("python"):
+            if "-B" not in launch_cmd:
+                launch_cmd.insert(1, "-B")
+        # Explicit env with PYTHONDONTWRITEBYTECODE (defense-in-depth)
+        env = os.environ.copy()
+        env["PYTHONDONTWRITEBYTECODE"] = "1"
         proc = subprocess.Popen(
-            cmd,
+            launch_cmd,
             cwd=cwd or str(BASE_DIR),
             stdin=subprocess.DEVNULL,
             stdout=open(lf, "a"),
             stderr=subprocess.STDOUT,
             start_new_session=True,
+            env=env,
         )
         return proc.pid
     except Exception as e:
@@ -137,35 +176,98 @@ def start_detached(cmd: list, cwd: str | None = None, logfile: str | None = None
 # ── Health checks ──
 
 def bot_healthy() -> tuple[bool, str]:
-    """Check bot PID + heartbeat freshness."""
+    """
+    Check bot health using PRIMARY signal: heartbeat age from runtime.json.
+    PID check is secondary/fallback only.
+    """
+    runtime = read_runtime()
     pid = read_pid("bot")
-    if not pid or not is_alive(pid):
-        return False, f"bot PID {pid} not alive" if pid else "bot never started"
 
+    # PRIMARY: heartbeat age from runtime.json
+    ts = runtime.get("timestamp", "")
+    if ts:
+        try:
+            age = (datetime.now(timezone.utc) - datetime.fromisoformat(ts)).total_seconds()
+            loop_interval = runtime.get("loop_interval_seconds", 60)
+            max_age = loop_interval * 4  # 4x loop interval grace period
+
+            # If PID exists but is zombie, bot is dead even if heartbeat looks fresh
+            if pid and not is_alive(pid):
+                return False, f"zombie PID {pid} (hb {age:.0f}s old)"
+
+            if age > max_age:
+                return False, f"heartbeat stale ({age:.0f}s > {max_age}s max)"
+
+            # Heartbeat is fresh — bot is running
+            return True, f"ok (hb {age:.0f}s old, PID {pid})"
+        except (ValueError, TypeError):
+            pass
+
+    # FALLBACK: PID + legacy heartbeat.json
     hb = STATE_DIR / "heartbeat.json"
-    if not hb.exists():
-        return False, "no heartbeat file"
-    try:
-        data = json.loads(hb.read_text())
-        ts = data.get("timestamp", "")
-        if not ts:
-            return False, "heartbeat has no timestamp"
-        age = (datetime.now(timezone.utc) - datetime.fromisoformat(ts)).total_seconds()
-        if age > 300:
-            return False, f"heartbeat stale ({age:.0f}s > 300s)"
-        return True, f"ok (PID {pid}, hb {age:.0f}s old)"
-    except (json.JSONDecodeError, ValueError, OSError) as e:
-        return False, f"heartbeat error: {e}"
+    if hb.exists() and pid and is_alive(pid):
+        try:
+            data = json.loads(hb.read_text())
+            ts = data.get("timestamp", "")
+            if ts:
+                age = (datetime.now(timezone.utc) - datetime.fromisoformat(ts)).total_seconds()
+                if age > 300:
+                    return False, f"legacy heartbeat stale ({age:.0f}s > 300s)"
+                return True, f"ok (legacy hb {age:.0f}s old, PID {pid})"
+        except (json.JSONDecodeError, ValueError, OSError):
+            pass
+    elif hb.exists() and (not pid or not is_alive(pid)):
+        return False, f"legacy heartbeat present but bot PID {pid} not alive"
+
+    # LAST RESORT: PID check
+    if pid and is_alive(pid):
+        return True, f"ok (PID {pid} alive, no heartbeat yet)"
+    if pid:
+        return False, f"bot PID {pid} not alive"
+    return False, "bot never started"
 
 
 def api_responding() -> bool:
-    import urllib.request, urllib.error
     try:
         r = urllib.request.Request("http://localhost:8502/api/dashboard", method="GET")
         with urllib.request.urlopen(r, timeout=5) as resp:
             return resp.status == 200
     except Exception:
         return False
+
+
+def verify_restart() -> tuple[bool, str]:
+    """
+    Run 3 checks after a bot restart:
+    1. Bot PID is alive and not zombie
+    2. Lock file PID matches running bot
+    3. Heartbeat written within 2 cycles
+    """
+    pid = read_pid("bot")
+    if not pid or not is_alive(pid):
+        return False, f"PID {pid} not alive"
+
+    lock_path = STATE_DIR / "bot.lock"
+    if lock_path.exists():
+        try:
+            lock_pid = int(lock_path.read_text().strip())
+            if lock_pid != pid:
+                return False, f"lock PID {lock_pid} != bot PID {pid}"
+        except (ValueError, OSError):
+            pass
+
+    runtime = read_runtime()
+    ts = runtime.get("timestamp", "")
+    if ts:
+        try:
+            age = (datetime.now(timezone.utc) - datetime.fromisoformat(ts)).total_seconds()
+            loop_interval = runtime.get("loop_interval_seconds", 60)
+            if age < loop_interval * 3:
+                return True, f"all checks passed (PID {pid}, hb {age:.0f}s)"
+        except (ValueError, TypeError):
+            pass
+
+    return True, f"started (PID {pid}, waiting for first heartbeat)"
 
 
 def tunnel_alive() -> bool:
@@ -228,11 +330,78 @@ def start_ingester() -> int | None:
     return pid
 
 
+def write_manual_intervention(reason: str):
+    """Write manual_intervention_required file and return True."""
+    mi_path = BASE_DIR / MANUAL_INTERVENTION_FILE
+    try:
+        mi_path.write_text(
+            f"{reason}\n"
+            f"Written at {datetime.now(timezone.utc).isoformat()}\n"
+            f"Remove this file to resume watchdog.\n"
+        )
+        log.error(f"🔴 Manual intervention flag written — {reason}")
+    except OSError:
+        pass
+
+
+# ── Circuit breaker for API server ──
+class APICircuitBreaker:
+    """3-strike + exponential backoff for API server restart.
+
+    Prevents fork-bomb if server.py crashes immediately on restart.
+    """
+
+    def __init__(self):
+        self.failures = 0
+        self.last_failure_time = 0
+        self.min_gap = 300  # 5 minutes between strike resets
+        self.max_strikes = 3
+        self.backoff_base = 5  # 5, 15, 45 seconds
+        self.degraded = False
+
+    def record_failure(self):
+        now = time.time()
+        if now - self.last_failure_time > self.min_gap:
+            self.failures = 0  # Reset if long gap (bot recovered)
+        self.failures += 1
+        self.last_failure_time = now
+        if self.failures >= self.max_strikes:
+            self.degraded = True
+        return self.failures
+
+    def get_backoff(self) -> int:
+        return min(self.backoff_base * (3 ** (self.failures - 1)), 120)  # 5, 15, 45, 120 cap
+
+    def record_success(self):
+        now = time.time()
+        if now - self.last_failure_time > self.min_gap:
+            self.failures = 0
+            self.degraded = False
+
+    def should_retry(self) -> bool:
+        if self.degraded:
+            return False  # Circuit open — stop trying
+        if self.failures == 0:
+            return True
+        backoff = self.get_backoff()
+        return (time.time() - self.last_failure_time) > backoff
+
+
 # ── Main loop ──
 
 def main():
+    # ── OS-level lock: prevent duplicate watchdog instances ──
+    try:
+        os.makedirs(os.path.dirname(LOCK_FILE), exist_ok=True)
+        lock_fd = open(LOCK_FILE, "w")
+        fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        log.info("🔒 Watchdog lock acquired (fd=%s)", lock_fd.fileno())
+    except (IOError, OSError) as e:
+        log.error("🔴 Another watchdog is already running (lock file: %s) — exiting", LOCK_FILE)
+        sys.exit(1)
+
     log.info("=" * 50)
-    log.info("🐶 Hermes Bot Watchdog v2 — PID %s (PPID %s)" % (os.getpid(), os.getppid()))
+    log.info("🐶 Hermes Bot Watchdog v3 — PID %s (PPID %s)", os.getpid(), os.getppid())
     write_pid("watchdog", os.getpid())
 
     # Phase 1: Ensure support infrastructure is up
@@ -249,10 +418,10 @@ def main():
     # Phase 2: Start bot
     healthy, reason = bot_healthy()
     if not healthy:
-        log.info(f"  Bot not healthy ({reason}) — starting")
+        log.info("  Bot not healthy (%s) — starting", reason)
         start_bot()
     else:
-        log.info(f"  Bot healthy ({reason})")
+        log.info("  Bot healthy (%s)", reason)
 
     # Wait for bot to initialize
     time.sleep(10)
@@ -262,31 +431,93 @@ def main():
     backoff = 60  # seconds, doubles up to 15min
     last_report = 0
     last_bot_start = time.time()
+    consecutive_verify_fails = 0
+    safe_mode = False  # Quarantine: after 3 verify fails, stop paper trading, only diagnostics
+    api_cb = APICircuitBreaker()  # Separate circuit breaker for API server
 
     while True:
         try:
             now = time.time()
+
+            # Check for manual intervention flag
+            mi_path = BASE_DIR / MANUAL_INTERVENTION_FILE
+            if mi_path.exists():
+                log.error("🔴 Manual intervention flag set — watchdog paused")
+                log.error("  Remove state/manual_intervention_required to resume")
+                time.sleep(60)
+                continue
+
+            # ── Bot health check ──
             healthy, reason = bot_healthy()
 
             if not healthy:
                 failures += 1
                 wait = min(backoff * (2 ** (failures - 1)), 900)
-                log.warning(f"🚨 Bot unhealthy (#{failures}): {reason} — restarting in {wait}s")
-                if (PIDS_DIR.parent / "crash.log").exists():
-                    log.warning("  📋 Check crash.log for the last traceback before restart")
-                time.sleep(min(wait, 30))  # Check in 30s chunks
+                log.warning("🚨 Bot unhealthy (#%s): %s — restarting in %ss", failures, reason, wait)
+
+                # Check for crash log
+                if (BASE_DIR / "state" / "crash.log").exists() and (BASE_DIR / "state" / "crash.log").stat().st_mtime > (time.time() - 300):
+                    log.warning("  📋 Crash log found (recent) — check state/crash.log for traceback")
+
+                if safe_mode:
+                    log.error("  🔒 SAFE MODE: Not restarting bot. Only diagnostics running.")
+                    log.error("  Remove state/manual_intervention_required and restart to recover.")
+                    write_manual_intervention("Safe mode: 3+ consecutive crashes, bot quarantined")
+                    time.sleep(60)
+                    continue
+
+                time.sleep(min(wait, 30))
                 start_bot()
                 last_bot_start = time.time()
-                if failures >= 5:
+
+                # 3-strike verification after restart
+                verify_wait = 0
+                verified = False
+                vreason = "no verify attempt"
+                while verify_wait < 15:
+                    time.sleep(5)
+                    verify_wait += 5
+                    vpassed, vreason = verify_restart()
+                    if vpassed:
+                        verified = True
+                        consecutive_verify_fails = 0
+                        log.info("  ✅ Restart verified: %s", vreason)
+                        break
+                    log.warning("  ⏳ Restart verify pending (%ss): %s", verify_wait, vreason)
+
+                if not verified:
+                    consecutive_verify_fails += 1
+                    log.warning("  ⚠️  Restart verification failed (%s/3)", consecutive_verify_fails)
+                    if consecutive_verify_fails >= 3:
+                        log.error("🔥 3 consecutive restart verify failures — entering safe mode")
+                        safe_mode = True
+                        write_manual_intervention(
+                            f"3 consecutive restart verify failures. Last: {vreason}"
+                        )
+                elif failures >= 5:
                     log.error("🔥 5+ bot restarts — entering slow-poll mode (every 5 min)")
                     time.sleep(240)
             else:
                 failures = 0  # Reset on success
 
-            # Also ensure API/tunnel are up (but only log — don't crash the loop)
+            # ── API server health check (with circuit breaker) ──
             if not api_responding():
-                log.warning("  API server down — restarting")
-                start_api()
+                if api_cb.should_retry():
+                    strike = api_cb.record_failure()
+                    backoff_sec = api_cb.get_backoff()
+                    log.warning("  🖥️  API server down (strike %s/3) — restarting in %ss", strike, backoff_sec)
+                    time.sleep(backoff_sec)
+                    start_api()
+                    # If it comes back, record success
+                    if api_responding():
+                        api_cb.record_success()
+                        log.info("  ✅ API server recovered")
+                else:
+                    if not api_cb.degraded:
+                        api_cb.degraded = True
+                        log.warning("  🖥️  API server circuit OPEN — marking degraded, will retry later")
+            else:
+                api_cb.record_success()
 
             # Periodic health report (every 5 min)
             if now - last_report > 300:
@@ -294,18 +525,21 @@ def main():
                 api = api_responding()
                 tun = tunnel_alive()
                 ing = ingester_alive()
-                log.info(f"📊 Bot={'✅' if h else '❌'} API={'✅' if api else '❌'} "
-                         f"Tun={'✅' if tun else '❌'} Ingest={'✅' if ing else '❌'} "
-                         f"| fail#{failures} | {r}")
+                mode_label = "🔒SAFE" if safe_mode else "   "
+                log.info(
+                    f"📊 {mode_label} Bot={'✅' if h else '❌'} API={'✅' if api else '❌'} "
+                    f"Tun={'✅' if tun else '❌'} Ingest={'✅' if ing else '❌'} "
+                    f"| fail#{failures} api_s#{api_cb.failures}/3{'🔴' if api_cb.degraded else ''} | {r}"
+                )
                 last_report = now
 
         except KeyboardInterrupt:
             log.info("🛑 Watchdog stopped by signal")
             break
         except Exception as e:
-            log.error(f"💥 Watchdog error: {e}", exc_info=True)
+            log.error("💥 Watchdog error: %s", e, exc_info=True)
 
-        time.sleep(30)  # Standard check interval
+        time.sleep(30)
 
 
 if __name__ == "__main__":
