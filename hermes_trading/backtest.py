@@ -270,6 +270,8 @@ async def run_backtest(
     start_balance: float = 1000.0,
     bars_db: str = "data/bars.db",
     fee_rate: float = 0.00025,  # Hyperliquid taker
+    variant: Optional[dict] = None,  # JSON overlay on strategy config
+    eval_start: Optional[int] = None,  # bar index to start evaluating from
 ) -> BacktestResult:
     """Run replay-mode backtest for one asset.
 
@@ -376,6 +378,21 @@ async def run_backtest(
     except (ImportError, AttributeError):
         pass
 
+    # ── Variant overlay (deep-merge into strategy config) ──
+    if variant:
+        def _deep_merge(base: dict, overlay: dict) -> dict:
+            for k, v in overlay.items():
+                if isinstance(v, dict) and isinstance(base.get(k), dict):
+                    _deep_merge(base[k], v)
+                else:
+                    base[k] = v
+            return base
+        strategy = _deep_merge(strategy, variant)
+        # Re-save with variant overrides
+        with open(strat_dir / "strategy.yaml", "w") as f:
+            yaml_save.dump(strategy, f)
+        print(f"🔧 Variant overlay applied: {json.dumps(variant)}", file=sys.stderr)
+
     # Results collector
     results = BacktestResult()
 
@@ -384,8 +401,9 @@ async def run_backtest(
     print(f"   Fee rate: {fee_rate*100:.3f}%")
     print(f"   Strategy bars: 1m")
 
-    # Log starting equity
-    results.add_equity_point(bars[0]["timestamp"], start_balance)
+    # Log starting equity (if no eval_start, or eval_start = 0)
+    if eval_start is None or eval_start == 0:
+        results.add_equity_point(bars[0]["timestamp"], start_balance)
 
     # Main replay loop — feed every bar through the exact same _cycle() code
     while replay_price.idx < len(bars):
@@ -404,13 +422,17 @@ async def run_backtest(
                 stub_macro,  # instead of macro_adapter
             )
 
-        # Track equity after each cycle
-        balance = loop.paper_balance
-        results.add_equity_point(bars[idx]["timestamp"], balance)
+        # Track equity after each cycle (only in eval window)
+        if eval_start is None or idx >= eval_start:
+            if not results.equity_curve:
+                # First point in eval window — log current balance as start
+                results.add_equity_point(bars[idx]["timestamp"], loop.paper_balance)
+            else:
+                results.add_equity_point(bars[idx]["timestamp"], loop.paper_balance)
 
         # Progress indicator every 200 bars
         if idx > 0 and idx % 200 == 0:
-            print(f"   {idx}/{len(bars)} bars (ETA: ~{idx} bars) — equity: ${balance:.2f}")
+            print(f"   {idx}/{len(bars)} bars (ETA: ~{idx} bars) — equity: ${loop.paper_balance:.2f}")
 
     # Force-close any remaining open MR positions at the last bar price
     for pos_key in list(loop.positions.keys()):
@@ -456,15 +478,25 @@ async def run_backtest(
 
         results.add_equity_point(last_bar["timestamp"], loop.paper_balance)
 
-    # Collect trades from the trade logger
+    # Collect trades from the trade logger — filter to eval window
     trades_file = loop.state_dir / asset_key / "trades.jsonl"
     if trades_file.exists():
+        from datetime import datetime as dt
+        # eval_start bar timestamp as ISO string for comparison
+        eval_cutoff = None
+        if eval_start is not None and eval_start < len(bars):
+            eval_cutoff = dt.fromtimestamp(bars[eval_start]["timestamp"]).isoformat()
         with open(trades_file) as f:
             for line in f:
                 line = line.strip()
                 if line:
                     try:
                         trade = json.loads(line)
+                        # Skip trades that closed before eval window
+                        if eval_cutoff is not None:
+                            exit_ts = trade.get("exit_time", "")
+                            if exit_ts < eval_cutoff:
+                                continue
                         results.add_trade(trade)
                     except json.JSONDecodeError:
                         pass
@@ -489,13 +521,28 @@ def main():
     parser.add_argument("--balance", type=float, default=1000.0, help="Starting paper balance")
     parser.add_argument("--db", default="data/bars.db", help="Path to bars.db")
     parser.add_argument("--fee", type=float, default=0.00025, help="Taker fee rate")
+    parser.add_argument("--variant", type=str, default=None,
+                        help="JSON string to deep-merge into strategy config (e.g. '{\"hurst\": {\"block_on_trending\": false}}')")
+    parser.add_argument("--eval-start", type=int, default=None,
+                        help="Bar index to start evaluating from (out-of-sample window start)")
     args = parser.parse_args()
+
+    # Parse variant JSON if provided
+    variant = None
+    if args.variant:
+        try:
+            variant = json.loads(args.variant)
+        except json.JSONDecodeError as e:
+            print(f"❌ Invalid --variant JSON: {e}")
+            sys.exit(1)
 
     asyncio.run(run_backtest(
         asset_key=args.asset,
         start_balance=args.balance,
         bars_db=args.db,
         fee_rate=args.fee,
+        variant=variant,
+        eval_start=args.eval_start,
     ))
 
 
