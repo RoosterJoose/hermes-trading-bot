@@ -1,0 +1,76 @@
+atr_sl_ceiling_pct: 10.0
+atr_sl_floor_pct: 1.0
+atr_sl_mult_alt: 3.0
+atr_sl_mult_major: 2.0
+btc_gate:
+  min_btc_1h_rsi: 30
+chandelier_mult_alts: 4.0
+chandelier_mult_major: 2.5
+cooldown_cycles: 30
+cusum:
+  baseline_window: 100
+  block_on_unstable: true
+  block_on_up_drift: true
+  break_threshold: 3
+  enabled: true
+  h: 4.0
+  k: 0.5
+  min_bars: 300
+dynamic_rsi:
+  enabled: true
+  entry_percentile: 5
+  exit_percentile: 95
+  min_bars: 1440
+  rsi_period: 14
+entry:
+  direction: long
+  indicator: rsi
+  threshold: 24
+evaluator:
+  enabled: true
+  falling_knife_drop_alt: 3.5
+  falling_knife_enabled: true
+  falling_knife_vol_alt: 4.0
+  lower_low_cascade: 3
+  min_candle_position: 0.3
+  volume_spike_mult: 1.5
+fng_gate:
+  min_value: 10
+hurst:
+  block_on_trending: true
+  enabled: true
+  min_bars: 500
+  mr_threshold: 0.45
+  trend_threshold: 0.55
+kill_switches:
+  enabled: true
+  max_daily_loss_pct: 2.5
+  max_open_positions: 3
+  stale_price_cycles: 5
+position_size_r: 0.5
+position_sizing:
+  atr_period: 14
+  base_atr_pct: 0.02
+  base_r: 0.5
+  enabled: true
+  heat_reduction: 0.5
+  max_streak_reduction: 0.25
+  max_total_exposure: 0.8
+  max_vol_scalar: 2.0
+  min_vol_scalar: 0.3
+  streak_reduction: 0.5
+  var_risk_fraction: 0.1
+stop_loss_pct: 4.3
+trend_filter:
+  adx_period: 30
+  adx_threshold_moderate: 20
+  adx_threshold_strong: 25
+  atr_period: 14
+  ema_period: 20
+  ema_slope_period: 3
+  enabled: true
+  max_slope_for_mr: 0.001
+version: '03'
+scale_out_min_R: 0.3
+tp2_target_R: 1.5
+tp2_slice: 0.5

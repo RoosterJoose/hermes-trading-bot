@@ -1,0 +1,447 @@
+{
+  "asset": "AVAX_USDT",
+  "total_trades": 10,
+  "completed_trades": 10,
+  "period": {
+    "first_trade": "2026-05-24T06:15:30",
+    "last_trade": "2026-05-24T14:12:22"
+  },
+  "prompt_1_discipline": {
+    "intended_policy": {
+      "entry_indicator": "rsi",
+      "entry_threshold": 29,
+      "stop_loss_pct": 5.0,
+      "position_size_r": 0.5,
+      "cooldown_cycles": 30,
+      "btc_4h_min_rsi": 50,
+      "btc_1h_min_rsi": 30,
+      "fng_min_value": 10,
+      "max_consecutive_losses": 5
+    },
+    "recent_checks": [
+      {
+        "entry_time": "2026-05-24T06:15:30",
+        "exit_reason": "scale_out_tp1",
+        "pnl_pct": 0.0,
+        "signal": "rsi_oversold",
+        "violations": []
+      },
+      {
+        "entry_time": "2026-05-24T06:15:30",
+        "exit_reason": "chandelier_exit",
+        "pnl_pct": 0.2416,
+        "signal": "rsi_oversold",
+        "violations": []
+      },
+      {
+        "entry_time": "2026-05-24T10:05:52",
+        "exit_reason": "scale_out_tp1",
+        "pnl_pct": 0.0,
+        "signal": "rsi_oversold",
+        "violations": []
+      },
+      {
+        "entry_time": "2026-05-24T10:05:52",
+        "exit_reason": "chandelier_exit",
+        "pnl_pct": 0.089,
+        "signal": "rsi_oversold",
+        "violations": []
+      },
+      {
+        "entry_time": "2026-05-24T10:51:23",
+        "exit_reason": "scale_out_tp1",
+        "pnl_pct": 0.0,
+        "signal": "rsi_oversold",
+        "violations": []
+      },
+      {
+        "entry_time": "2026-05-24T10:51:23",
+        "exit_reason": "chandelier_exit",
+        "pnl_pct": -0.1954,
+        "signal": "rsi_oversold",
+        "violations": []
+      },
+      {
+        "entry_time": "2026-05-24T12:10:40",
+        "exit_reason": "scale_out_tp1",
+        "pnl_pct": 0.0,
+        "signal": "rsi_oversold",
+        "violations": []
+      },
+      {
+        "entry_time": "2026-05-24T12:10:40",
+        "exit_reason": "chandelier_exit",
+        "pnl_pct": 0.1201,
+        "signal": "rsi_oversold",
+        "violations": []
+      },
+      {
+        "entry_time": "2026-05-24T13:57:07",
+        "exit_reason": "scale_out_tp1",
+        "pnl_pct": 0.0,
+        "signal": "rsi_oversold",
+        "violations": []
+      },
+      {
+        "entry_time": "2026-05-24T13:57:07",
+        "exit_reason": "chandelier_exit",
+        "pnl_pct": 0.4375,
+        "signal": "rsi_oversold",
+        "violations": []
+      }
+    ],
+    "violation_count": 0,
+    "position_scaling_context": {
+      "note": "Position sizes are dynamic (volatility scalar \u00d7 streak scalar \u00d7 confidence scale). Variations from base_r are INTENTIONAL, not discipline slips.",
+      "base_r": 0.5,
+      "recent_actual_sizes": [
+        {
+          "entry_time": "2026-05-24T06:15:30",
+          "size": 0.2,
+          "signal": "rsi_oversold"
+        },
+        {
+          "entry_time": "2026-05-24T06:15:30",
+          "size": 0.2,
+          "signal": "rsi_oversold"
+        },
+        {
+          "entry_time": "2026-05-24T10:05:52",
+          "size": 0.12,
+          "signal": "rsi_oversold"
+        },
+        {
+          "entry_time": "2026-05-24T10:05:52",
+          "size": 0.12,
+          "signal": "rsi_oversold"
+        },
+        {
+          "entry_time": "2026-05-24T10:51:23",
+          "size": 0.12,
+          "signal": "rsi_oversold"
+        },
+        {
+          "entry_time": "2026-05-24T10:51:23",
+          "size": 0.12,
+          "signal": "rsi_oversold"
+        },
+        {
+          "entry_time": "2026-05-24T12:10:40",
+          "size": 0.12,
+          "signal": "rsi_oversold"
+        },
+        {
+          "entry_time": "2026-05-24T12:10:40",
+          "size": 0.12,
+          "signal": "rsi_oversold"
+        },
+        {
+          "entry_time": "2026-05-24T13:57:07",
+          "size": 0.12,
+          "signal": "rsi_oversold"
+        },
+        {
+          "entry_time": "2026-05-24T13:57:07",
+          "size": 0.12,
+          "signal": "rsi_oversold"
+        }
+      ],
+      "system": "full entries use base_r (0.5R) \u00d7 vol_scalar \u00d7 streak_scalar | half entries use 0.5\u00d7 (confidence 0.55-0.60) | full entries use 1\u00d7 (confidence \u22650.60)"
+    }
+  },
+  "prompt_2_r_multiple": {
+    "histogram": {
+      "<-3R": 0,
+      "-3R to -2R": 0,
+      "-2R to -1R": 0,
+      "-1R to 0": 1,
+      "0 to 1R": 9,
+      "1R to 2R": 0,
+      "2R to 3R": 0,
+      ">3R": 0
+    },
+    "total_r_multis": 10,
+    "avg_r": 0.01,
+    "max_r": 0.09,
+    "min_r": -0.04,
+    "histogram_shape": "symmetric"
+  },
+  "prompt_3_duration": {
+    "durations_analyzed": 10,
+    "duration_buckets": {
+      "0-5m": {
+        "count": 7,
+        "avg_r": -0.0,
+        "avg_pnl_pct": -0.011,
+        "win_rate": 14.3
+      },
+      "5-15m": {
+        "count": 2,
+        "avg_r": 0.04,
+        "avg_pnl_pct": 0.165,
+        "win_rate": 100.0
+      },
+      "15-30m": {
+        "count": 1,
+        "avg_r": 0.09,
+        "avg_pnl_pct": 0.438,
+        "win_rate": 100.0
+      }
+    },
+    "longest_trade_mins": 15.3,
+    "shortest_trade_mins": 0.0
+  },
+  "prompt_4_regime": {
+    "win_loss_sequence": [
+      "B/E",
+      "W",
+      "B/E",
+      "W",
+      "B/E",
+      "L",
+      "B/E",
+      "W",
+      "B/E",
+      "W"
+    ],
+    "total_sequence_length": 10,
+    "regime_performance": {
+      "range_bound": {
+        "count": 10,
+        "avg_pnl_pct": 0.0693,
+        "win_rate": 40.0,
+        "total_pnl_pct": 0.69
+      }
+    },
+    "clusters": []
+  },
+  "skip_quality": {
+    "analysis": {
+      "cooldown 1/30": {
+        "count": 2,
+        "avg_score": null,
+        "max_score": null,
+        "min_score": null,
+        "near_misses": 0
+      },
+      "cooldown 10/30": {
+        "count": 2,
+        "avg_score": null,
+        "max_score": null,
+        "min_score": null,
+        "near_misses": 0
+      },
+      "cooldown 11/30": {
+        "count": 2,
+        "avg_score": null,
+        "max_score": null,
+        "min_score": null,
+        "near_misses": 0
+      },
+      "cooldown 12/30": {
+        "count": 2,
+        "avg_score": null,
+        "max_score": null,
+        "min_score": null,
+        "near_misses": 0
+      },
+      "cooldown 13/30": {
+        "count": 2,
+        "avg_score": null,
+        "max_score": null,
+        "min_score": null,
+        "near_misses": 0
+      },
+      "cooldown 14/30": {
+        "count": 2,
+        "avg_score": null,
+        "max_score": null,
+        "min_score": null,
+        "near_misses": 0
+      },
+      "cooldown 15/30": {
+        "count": 2,
+        "avg_score": null,
+        "max_score": null,
+        "min_score": null,
+        "near_misses": 0
+      },
+      "cooldown 16/30": {
+        "count": 2,
+        "avg_score": null,
+        "max_score": null,
+        "min_score": null,
+        "near_misses": 0
+      },
+      "cooldown 17/30": {
+        "count": 2,
+        "avg_score": null,
+        "max_score": null,
+        "min_score": null,
+        "near_misses": 0
+      },
+      "cooldown 18/30": {
+        "count": 2,
+        "avg_score": null,
+        "max_score": null,
+        "min_score": null,
+        "near_misses": 0
+      },
+      "cooldown 19/30": {
+        "count": 2,
+        "avg_score": null,
+        "max_score": null,
+        "min_score": null,
+        "near_misses": 0
+      },
+      "cooldown 2/30": {
+        "count": 2,
+        "avg_score": null,
+        "max_score": null,
+        "min_score": null,
+        "near_misses": 0
+      },
+      "cooldown 20/30": {
+        "count": 2,
+        "avg_score": null,
+        "max_score": null,
+        "min_score": null,
+        "near_misses": 0
+      },
+      "cooldown 21/30": {
+        "count": 2,
+        "avg_score": null,
+        "max_score": null,
+        "min_score": null,
+        "near_misses": 0
+      },
+      "cooldown 22/30": {
+        "count": 2,
+        "avg_score": null,
+        "max_score": null,
+        "min_score": null,
+        "near_misses": 0
+      },
+      "cooldown 23/30": {
+        "count": 2,
+        "avg_score": null,
+        "max_score": null,
+        "min_score": null,
+        "near_misses": 0
+      },
+      "cooldown 24/30": {
+        "count": 2,
+        "avg_score": null,
+        "max_score": null,
+        "min_score": null,
+        "near_misses": 0
+      },
+      "cooldown 25/30": {
+        "count": 2,
+        "avg_score": null,
+        "max_score": null,
+        "min_score": null,
+        "near_misses": 0
+      },
+      "cooldown 26/30": {
+        "count": 2,
+        "avg_score": null,
+        "max_score": null,
+        "min_score": null,
+        "near_misses": 0
+      },
+      "cooldown 27/30": {
+        "count": 2,
+        "avg_score": null,
+        "max_score": null,
+        "min_score": null,
+        "near_misses": 0
+      },
+      "cooldown 28/30": {
+        "count": 2,
+        "avg_score": null,
+        "max_score": null,
+        "min_score": null,
+        "near_misses": 0
+      },
+      "cooldown 29/30": {
+        "count": 2,
+        "avg_score": null,
+        "max_score": null,
+        "min_score": null,
+        "near_misses": 0
+      },
+      "cooldown 3/30": {
+        "count": 2,
+        "avg_score": null,
+        "max_score": null,
+        "min_score": null,
+        "near_misses": 0
+      },
+      "cooldown 4/30": {
+        "count": 2,
+        "avg_score": null,
+        "max_score": null,
+        "min_score": null,
+        "near_misses": 0
+      },
+      "cooldown 5/30": {
+        "count": 2,
+        "avg_score": null,
+        "max_score": null,
+        "min_score": null,
+        "near_misses": 0
+      },
+      "cooldown 6/30": {
+        "count": 2,
+        "avg_score": null,
+        "max_score": null,
+        "min_score": null,
+        "near_misses": 0
+      },
+      "cooldown 7/30": {
+        "count": 2,
+        "avg_score": null,
+        "max_score": null,
+        "min_score": null,
+        "near_misses": 0
+      },
+      "cooldown 8/30": {
+        "count": 2,
+        "avg_score": null,
+        "max_score": null,
+        "min_score": null,
+        "near_misses": 0
+      },
+      "cooldown 9/30": {
+        "count": 2,
+        "avg_score": null,
+        "max_score": null,
+        "min_score": null,
+        "near_misses": 0
+      },
+      "kill_switch": {
+        "count": 59,
+        "avg_score": null,
+        "max_score": null,
+        "min_score": null,
+        "near_misses": 0
+      },
+      "low_confidence": {
+        "count": 83,
+        "avg_score": 0.407,
+        "max_score": 0.533,
+        "min_score": 0.361,
+        "near_misses": 0
+      }
+    },
+    "total_skips": 577,
+    "evaluation_note": "LLM: compare near_miss counts against threshold settings. If many near-misses (0.55-0.60) on winning moves, thresholds may be too strict."
+  },
+  "recent_strategy_version": "02",
+  "current_strategy": {
+    "entry_threshold": 29,
+    "stop_loss_pct": 5.0,
+    "btc_4h_gate": 50
+  }
+}

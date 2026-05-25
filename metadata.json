@@ -1,0 +1,6 @@
+{
+  "name": "Hermes Command Center",
+  "description": "High-fidelity mission-control dashboard for the paper-first perpetual futures trading bot, Hermes.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

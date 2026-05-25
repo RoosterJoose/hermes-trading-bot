@@ -1,0 +1,1064 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Hermes Command Center</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    background: #0a0c10;
+    color: #e8eaed;
+    min-height: 100vh;
+}
+
+/* ── Layout ── */
+.container { max-width: 1600px; margin: 0 auto; padding: 0.75rem 1.25rem; }
+
+/* ── Header ── */
+.header {
+    display: flex; align-items: center; gap: 1rem;
+    padding: 0.5rem 0; flex-wrap: wrap;
+}
+.header-title { font-size: 1.3rem; font-weight: 600; display: flex; align-items: center; gap: 0.4rem; }
+.header-title .bolt { color: #d29922; }
+.badge-paper { 
+    display: inline-block; padding: 0.1rem 0.45rem; border-radius: 3px;
+    font-size: 0.6rem; font-weight: 600; letter-spacing: 0.5px;
+    background: #2d2a12; color: #d29922; border: 1px solid #4a471f;
+}
+.badge-locked {
+    display: inline-block; padding: 0.1rem 0.4rem; border-radius: 3px;
+    font-size: 0.6rem; font-weight: 600;
+    background: #2d1215; color: #f85149; border: 1px solid #4a1f22;
+}
+.status-strip {
+    display: flex; align-items: center; gap: 0.5rem;
+    font-size: 0.72rem; color: #8b949e; flex-wrap: wrap;
+}
+.status-dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; margin-right: 3px; }
+.dot-green { background: #2ea043; }
+.dot-red { background: #da3633; }
+.dot-yellow { background: #d29922; }
+
+/* ── KPI Strip ── */
+.kpi-strip {
+    display: grid; grid-template-columns: repeat(6, 1fr); gap: 0.4rem;
+    margin: 0.5rem 0;
+}
+.kpi-card {
+    background: #0d0f13; border: 1px solid #262a30; border-radius: 6px;
+    padding: 0.4rem 0.6rem;
+}
+.kpi-label { color: #8b949e; font-size: 0.55rem; text-transform: uppercase; letter-spacing: 0.4px; }
+.kpi-value { font-size: 1rem; font-weight: 600; line-height: 1.3; }
+.kpi-sub { color: #6e7681; font-size: 0.6rem; }
+.pos { color: #2ea043; }
+.neg { color: #da3633; }
+.warn { color: #d29922; }
+.info { color: #58a6ff; }
+
+/* ── Tabs ── */
+.tab-bar {
+    display: flex; gap: 0; border-bottom: 1px solid #262a30;
+    margin: 0.4rem 0 0.75rem 0;
+}
+.tab-btn {
+    padding: 0.45rem 1rem; font-size: 0.7rem; font-weight: 500;
+    text-transform: uppercase; letter-spacing: 0.5px;
+    color: #8b949e; border: none; background: none; cursor: pointer;
+    border-bottom: 2px solid transparent; transition: all 0.15s;
+}
+.tab-btn:hover { color: #e8eaed; background: rgba(255,255,255,0.02); }
+.tab-btn.active { color: #58a6ff; border-bottom-color: #58a6ff; }
+.tab-content { display: none; }
+.tab-content.active { display: block; }
+
+/* ── Panels ── */
+.panel {
+    background: #111318; border: 1px solid #262a30; border-radius: 8px;
+    padding: 0.6rem 0.8rem; margin-bottom: 0.6rem;
+}
+.panel-title {
+    color: #8b949e; font-size: 0.6rem; text-transform: uppercase;
+    letter-spacing: 0.6px; font-weight: 600; margin-bottom: 0.4rem;
+}
+.panel-row { display: flex; gap: 0.6rem; flex-wrap: wrap; }
+.panel-col { flex: 1; min-width: 200px; }
+.panel-grid { display: grid; gap: 0.5rem; }
+
+/* ── Metrics inside panels ── */
+.metric-row { display: flex; justify-content: space-between; align-items: center; padding: 0.3rem 0; }
+.metric-row + .metric-row { border-top: 1px solid #1c2025; }
+.metric-label { color: #8b949e; font-size: 0.65rem; }
+.metric-val { font-size: 0.85rem; font-weight: 500; }
+
+/* ── Activity ── */
+.activity-row {
+    padding: 0.3rem 0; font-size: 0.72rem;
+    border-bottom: 1px solid #1c2025; display: flex; align-items: center; gap: 0.4rem;
+}
+.activity-row:last-child { border-bottom: none; }
+.activity-time { color: #6e7681; white-space: nowrap; }
+
+/* ── Badges ── */
+.tag {
+    display: inline-block; padding: 0.06rem 0.35rem; border-radius: 3px;
+    font-size: 0.55rem; font-weight: 600; letter-spacing: 0.3px; white-space: nowrap;
+}
+.tag-green { background: #122d1a; color: #3fb950; border: 1px solid #1f4a2a; }
+.tag-red { background: #2d1215; color: #f85149; border: 1px solid #4a1f22; }
+.tag-yellow { background: #2d2a12; color: #d29922; border: 1px solid #4a471f; }
+.tag-cyan { background: #121d2d; color: #58a6ff; border: 1px solid #1f304a; }
+.tag-gray { background: #161b22; color: #8b949e; border: 1px solid #30363d; }
+
+/* ── Tables ── */
+table { width: 100%; border-collapse: collapse; font-size: 0.72rem; }
+th { color: #8b949e; text-align: left; padding: 0.3rem 0.4rem; border-bottom: 1px solid #262a30; font-weight: 500; }
+td { padding: 0.25rem 0.4rem; border-bottom: 1px solid #1c2025; }
+tr:hover td { background: rgba(255,255,255,0.02); }
+
+/* ── Position cards ── */
+.pos-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0.25rem 0.5rem; font-size: 0.7rem; }
+.pos-label { color: #8b949e; font-size: 0.55rem; text-transform: uppercase; letter-spacing: 0.3px; }
+.pos-value { color: #e8eaed; font-weight: 500; }
+
+/* ── Readiness gauge ── */
+.gauge-wrap { text-align: center; }
+.gauge-svg { width: 220px; height: 130px; }
+
+/* ── Charts ── */
+.chart-container { position: relative; height: 200px; }
+.chart-container-sm { position: relative; height: 120px; }
+
+/* ── Filter bar ── */
+.filter-bar { display: flex; gap: 0.5rem; margin-bottom: 0.5rem; flex-wrap: wrap; }
+.filter-bar select {
+    background: #0d0f13; border: 1px solid #262a30; border-radius: 4px;
+    color: #e8eaed; font-size: 0.7rem; padding: 0.25rem 0.5rem;
+}
+
+/* ── Blockers ── */
+.blocker { color: #f85149; font-size: 0.75rem; padding: 0.15rem 0; }
+.blocker::before { content: "⚠ "; }
+
+/* ── Blocker list ── */
+.blocker-list { margin-top: 0.3rem; }
+
+/* ── Misc ── */
+hr { border: none; border-top: 1px solid #262a30; margin: 0.5rem 0; }
+.text-muted { color: #8b949e; font-size: 0.65rem; }
+.text-center { text-align: center; }
+.mt-1 { margin-top: 0.5rem; }
+.mb-1 { margin-bottom: 0.5rem; }
+.grid-4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 0.5rem; }
+.grid-5 { display: grid; grid-template-columns: repeat(5, 1fr); gap: 0.5rem; }
+
+.empty-state {
+    color: #6e7681; text-align: center; padding: 1.5rem;
+    font-size: 0.8rem;
+}
+
+/* Scroll styling */
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-track { background: #0a0c10; }
+::-webkit-scrollbar-thumb { background: #262a30; border-radius: 3px; }
+
+.loading {
+    text-align: center; padding: 2rem; color: #8b949e; font-size: 0.8rem;
+}
+.loading::after { content: "..."; animation: dots 1.5s steps(4, end) infinite; }
+@keyframes dots { 0%, 20% { content: "."; } 40% { content: ".."; } 60% { content: "..."; } 90%, 100% { content: ""; } }
+</style>
+</head>
+<body>
+
+<div class="container">
+
+<!-- ──── HEADER ──── -->
+<div class="header">
+    <div style="display:flex;align-items:center;gap:0.5rem;">
+        <span class="header-title"><span class="bolt">⚡</span> HERMES</span>
+        <span class="badge-paper" id="modeBadge">PAPER</span>
+    </div>
+    <div id="statusStrip" class="status-strip">
+        <span class="text-muted">Loading...</span>
+    </div>
+</div>
+
+<!-- ──── KPI STRIP ──── -->
+<div class="kpi-strip" id="kpiStrip">
+    <div class="kpi-card"><div class="kpi-label">Balance</div><div class="kpi-value" id="kpiBalance">—</div></div>
+    <div class="kpi-card"><div class="kpi-label">Net PnL</div><div class="kpi-value" id="kpiPnl">—</div></div>
+    <div class="kpi-card"><div class="kpi-label">Win Rate</div><div class="kpi-value" id="kpiWr">—</div></div>
+    <div class="kpi-card"><div class="kpi-label">Profit Factor</div><div class="kpi-value" id="kpiPf">—</div></div>
+    <div class="kpi-card"><div class="kpi-label">Trades</div><div class="kpi-value" id="kpiTrades">—</div></div>
+    <div class="kpi-card"><div class="kpi-label">Max DD</div><div class="kpi-value" id="kpiDd">—</div></div>
+</div>
+
+<!-- ──── TABS ──── -->
+<div class="tab-bar">
+    <button class="tab-btn active" data-tab="overview">📊 Overview</button>
+    <button class="tab-btn" data-tab="readiness">🚀 Readiness</button>
+    <button class="tab-btn" data-tab="positions">📍 Positions</button>
+    <button class="tab-btn" data-tab="activity">📋 Activity</button>
+    <button class="tab-btn" data-tab="research">🧠 Research</button>
+</div>
+
+<!-- ════════════════════ TAB: OVERVIEW ════════════════════ -->
+<div class="tab-content active" id="tabOverview">
+    <div class="panel-row">
+        <div class="panel-col" style="flex:2;">
+            <div class="panel">
+                <div class="panel-title">📈 Equity Curve</div>
+                <div class="chart-container"><canvas id="chartEquity"></canvas></div>
+            </div>
+        </div>
+        <div class="panel-col" style="flex:1;">
+            <div class="panel">
+                <div class="panel-title">📉 Drawdown</div>
+                <div class="chart-container-sm"><canvas id="chartDrawdown"></canvas></div>
+            </div>
+            <div style="display:flex;gap:0.4rem;">
+                <div class="kpi-card" style="flex:1;"><div class="kpi-label">Max DD</div><div class="kpi-value neg" id="ovMaxDd">—</div></div>
+                <div class="kpi-card" style="flex:1;"><div class="kpi-label">Current DD</div><div class="kpi-value warn" id="ovCurDd">—</div></div>
+            </div>
+        </div>
+    </div>
+
+    <div class="panel-row">
+        <div class="panel-col" style="flex:1;">
+            <div class="panel">
+                <div class="panel-title">🛡️ Risk Cockpit</div>
+                <div id="riskCockpit">
+                    <div class="metric-row"><span class="metric-label">Trust State</span><span class="metric-val info">—</span></div>
+                    <div class="metric-row"><span class="metric-label">₿ BTC</span><span class="metric-val">—</span></div>
+                    <div class="metric-row"><span class="metric-label">😱 Fear & Greed</span><span class="metric-val">—</span></div>
+                    <div class="metric-row"><span class="metric-label">🎲 MC 95% DD</span><span class="metric-val">—</span></div>
+                    <div class="metric-row"><span class="metric-label">📦 Optimizer</span><span class="metric-val">—</span></div>
+                </div>
+            </div>
+        </div>
+        <div class="panel-col" style="flex:1.4;">
+            <div class="panel">
+                <div class="panel-title">📋 Recent Activity</div>
+                <div id="activityFeed"><div class="text-muted">No activity yet</div></div>
+            </div>
+        </div>
+        <div class="panel-col" style="flex:1.2;">
+            <div class="panel">
+                <div class="panel-title">📊 Open Positions</div>
+                <div id="ovPositions"><div class="empty-state">No open positions</div></div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- ════════════════════ TAB: READINESS ════════════════════ -->
+<div class="tab-content" id="tabReadiness">
+    <h3 style="margin-bottom:0.3rem;">🚀 Live Readiness Assessment</h3>
+    <div class="text-muted" style="margin-bottom:0.75rem;">Paper-first by design. Live trading locks until all requirements met.</div>
+
+    <div class="panel-row">
+        <div class="panel-col" style="flex:1;">
+            <div class="panel gauge-wrap">
+                <div class="gauge-svg" id="gaugeContainer">
+                    <svg width="220" height="130" viewBox="0 0 220 130">
+                        <defs>
+                            <linearGradient id="gaugeGrad" x1="0" y1="0" x2="1" y2="0">
+                                <stop offset="0%" stop-color="#da3633"/>
+                                <stop offset="33%" stop-color="#d29922"/>
+                                <stop offset="66%" stop-color="#2ea043"/>
+                                <stop offset="100%" stop-color="#2ea043"/>
+                            </linearGradient>
+                        </defs>
+                        <!-- Background arc -->
+                        <path d="M 20 110 A 90 90 0 0 1 200 110" fill="none" stroke="#1c2025" stroke-width="18" stroke-linecap="round"/>
+                        <!-- Value arc -->
+                        <path id="gaugeArc" d="M 20 110 A 90 90 0 0 1 200 110" fill="none" stroke="url(#gaugeGrad)" stroke-width="18" stroke-linecap="round" stroke-dasharray="0 283"/>
+                        <!-- Center text -->
+                        <text id="gaugeScore" x="110" y="75" text-anchor="middle" fill="#e8eaed" font-size="28" font-weight="600">0</text>
+                        <text id="gaugeLabel" x="110" y="95" text-anchor="middle" fill="#8b949e" font-size="10">/ 100</text>
+                        <!-- Tick marks -->
+                        <line x1="20" y1="110" x2="20" y2="120" stroke="#8b949e" stroke-width="1"/>
+                        <line x1="110" y1="20" x2="110" y2="30" stroke="#8b949e" stroke-width="1"/>
+                        <line x1="200" y1="110" x2="200" y2="120" stroke="#8b949e" stroke-width="1"/>
+                        <text x="20" y="128" text-anchor="middle" fill="#6e7681" font-size="8">0</text>
+                        <text x="110" y="18" text-anchor="middle" fill="#6e7681" font-size="8">50</text>
+                        <text x="200" y="128" text-anchor="middle" fill="#6e7681" font-size="8">100</text>
+                    </svg>
+                </div>
+                <div id="rdyStatus" style="font-size:1rem;font-weight:600;margin-top:0.3rem;">⏳ Checking...</div>
+                <div class="text-muted mt-1">🔒 Live trading is locked until all readiness requirements are met.</div>
+            </div>
+        </div>
+        <div class="panel-col" style="flex:2;">
+            <div class="panel">
+                <div class="panel-title">Readiness Metrics</div>
+                <table id="rdyTable">
+                    <thead><tr><th>METRIC</th><th style="text-align:center;">CURRENT</th><th style="text-align:center;">TARGET</th><th style="text-align:right;">STATUS</th></tr></thead>
+                    <tbody></tbody>
+                </table>
+            </div>
+            <div class="panel" id="blockersPanel" style="display:none;">
+                <div class="panel-title">🔴 Blockers</div>
+                <div id="blockerList"></div>
+            </div>
+        </div>
+    </div>
+
+    <div class="grid-4" id="rdyCards">
+        <div class="panel"><div class="kpi-label">Paper Days</div><div style="font-size:1.2rem;font-weight:600;">0</div><div class="kpi-sub">/ 30</div></div>
+        <div class="panel"><div class="kpi-label">Trade Sample</div><div style="font-size:1.2rem;font-weight:600;">0</div><div class="kpi-sub">/ 50</div></div>
+        <div class="panel"><div class="kpi-label">Stop-Loss Ratio</div><div style="font-size:1.2rem;font-weight:600;">—</div><div class="kpi-sub">limit 40%</div></div>
+        <div class="panel"><div class="kpi-label">Sharpe</div><div style="font-size:1.2rem;font-weight:600;">—</div><div class="kpi-sub">≥ 0.8</div></div>
+    </div>
+</div>
+
+<!-- ════════════════════ TAB: POSITIONS ════════════════════ -->
+<div class="tab-content" id="tabPositions">
+    <div class="panel">
+        <div class="panel-title">📊 Open Positions</div>
+        <div id="posCards" class="panel-row"><div class="empty-state">No open positions</div></div>
+    </div>
+
+    <div class="panel">
+        <div class="panel-title">📋 Closed Trades</div>
+        <div class="filter-bar">
+            <select id="posAssetFilter"><option value="All">All Assets</option></select>
+            <select id="posExitFilter"><option value="All">All Exits</option></select>
+            <select id="posOutcomeFilter"><option value="All">All Outcomes</option><option value="Win">Win</option><option value="Loss">Loss</option></select>
+        </div>
+        <div style="max-height:400px;overflow-y:auto;">
+            <table id="posTradesTable"><thead><tr><th>Time</th><th>Asset</th><th>Entry</th><th>Exit</th><th>PnL%</th><th>Reason</th><th>Held</th></tr></thead><tbody></tbody></table>
+        </div>
+    </div>
+</div>
+
+<!-- ════════════════════ TAB: ACTIVITY ════════════════════ -->
+<div class="tab-content" id="tabActivity">
+    <div class="panel">
+        <div class="panel-title">📋 Full Activity Stream</div>
+        <div class="filter-bar">
+            <select id="actTypeFilter"><option value="All">All Types</option></select>
+            <select id="actAssetFilter"><option value="All">All Assets</option></select>
+        </div>
+        <div id="activityFull" style="max-height:500px;overflow-y:auto;">
+            <div class="empty-state">No events</div>
+        </div>
+    </div>
+</div>
+
+<!-- ════════════════════ TAB: RESEARCH ════════════════════ -->
+<div class="tab-content" id="tabResearch">
+    <div style="display:flex;gap:0.5rem;margin-bottom:0.5rem;">
+        <button class="tab-btn active" data-subtab="leaderboard" style="font-size:0.65rem;">Leaderboard</button>
+        <button class="tab-btn" data-subtab="gates" style="font-size:0.65rem;">Gates</button>
+        <button class="tab-btn" data-subtab="skips" style="font-size:0.65rem;">Skips</button>
+        <button class="tab-btn" data-subtab="scores" style="font-size:0.65rem;">Scores</button>
+    </div>
+
+    <div class="subtab-content active" id="subLeaderboard">
+        <div class="panel">
+            <div class="panel-title">Asset Leaderboard</div>
+            <table id="lbTable"><thead><tr><th>Asset</th><th>Trades</th><th>Net PnL</th><th>Win Rate</th><th>PF</th><th>Max DD</th><th>Avg Hold</th><th>Status</th></tr></thead><tbody></tbody></table>
+        </div>
+        <div class="panel-row" id="perfSummary">
+            <div class="panel-col"><div class="panel"><div class="kpi-label">Gross PnL</div><div class="kpi-value">—</div></div></div>
+            <div class="panel-col"><div class="panel"><div class="kpi-label">Net PnL</div><div class="kpi-value">—</div><div class="kpi-sub">after fees/funding</div></div></div>
+            <div class="panel-col"><div class="panel"><div class="kpi-label">Fees</div><div class="kpi-value neg">—</div></div></div>
+            <div class="panel-col"><div class="panel"><div class="kpi-label">Funding</div><div class="kpi-value">—</div></div></div>
+            <div class="panel-col"><div class="panel"><div class="kpi-label">Expectancy</div><div class="kpi-value">—</div><div class="kpi-sub">per trade</div></div></div>
+        </div>
+    </div>
+
+    <div class="subtab-content" id="subGates">
+        <div class="panel">
+            <div class="panel-title">Gate Attribution</div>
+            <div class="chart-container" style="height:240px;"><canvas id="chartGates"></canvas></div>
+        </div>
+        <div class="grid-5" id="gateCards"></div>
+    </div>
+
+    <div class="subtab-content" id="subSkips">
+        <div class="panel-row">
+            <div class="panel-col" style="flex:1;">
+                <div class="panel">
+                    <div class="panel-title">Skip Distribution</div>
+                    <div class="chart-container" style="height:260px;"><canvas id="chartSkips"></canvas></div>
+                </div>
+            </div>
+            <div class="panel-col" style="flex:1;">
+                <div class="panel">
+                    <div class="panel-title">Skip Breakdown</div>
+                    <table id="skipTable"><thead><tr><th>Reason</th><th>Count</th><th>%</th></tr></thead><tbody></tbody></table>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="subtab-content" id="subScores">
+        <div class="panel">
+            <div class="panel-title">Confidence Score Distribution</div>
+            <div class="chart-container" style="height:240px;"><canvas id="chartScores"></canvas></div>
+        </div>
+        <div class="grid-4" id="scoreCards">
+            <div class="panel"><div class="kpi-label">Mean</div><div class="kpi-value">—</div></div>
+            <div class="panel"><div class="kpi-label">Median</div><div class="kpi-value">—</div></div>
+            <div class="panel"><div class="kpi-label">≥ 0.55</div><div class="kpi-value">—</div></div>
+            <div class="panel"><div class="kpi-label">&lt; 0.55</div><div class="kpi-value">—</div></div>
+        </div>
+    </div>
+</div>
+
+<hr>
+<div class="text-muted text-center" style="font-size:0.55rem;">Hermes Trading Bot • Read-Only • Paper Mode • Auto-refreshes every 30s</div>
+
+</div><!-- .container -->
+
+<script>
+// ═══════════════════════════════════════════════════════════════
+// STATE & CONFIG
+// ═══════════════════════════════════════════════════════════════
+const API = '/api';
+let charts = {};
+let refreshInterval = null;
+
+// ═══════════════════════════════════════════════════════════════
+// DATA FETCH
+// ═══════════════════════════════════════════════════════════════
+async function api(endpoint) {
+    const resp = await fetch(`${API}/${endpoint}`);
+    const data = await resp.json();
+    if (!data.ok) throw new Error(data.error || 'API error');
+    return data.data;
+}
+
+// ═══════════════════════════════════════════════════════════════
+// TABS
+// ═══════════════════════════════════════════════════════════════
+document.querySelectorAll('.tab-btn[data-tab]').forEach(btn => {
+    btn.addEventListener('click', () => {
+        document.querySelectorAll('.tab-btn[data-tab]').forEach(b => b.classList.remove('active'));
+        document.querySelectorAll('.tab-content[id^="tab"]').forEach(c => c.classList.remove('active'));
+        btn.classList.add('active');
+        document.getElementById('tab' + btn.dataset.tab.charAt(0).toUpperCase() + btn.dataset.tab.slice(1)).classList.add('active');
+    });
+});
+
+// Sub-tabs (research)
+document.querySelectorAll('[data-subtab]').forEach(btn => {
+    btn.addEventListener('click', () => {
+        document.querySelectorAll('[data-subtab]').forEach(b => b.classList.remove('active'));
+        document.querySelectorAll('.subtab-content').forEach(c => c.classList.remove('active'));
+        btn.classList.add('active');
+        document.getElementById('sub' + btn.dataset.subtab.charAt(0).toUpperCase() + btn.dataset.subtab.slice(1)).classList.add('active');
+    });
+});
+
+// ═══════════════════════════════════════════════════════════════
+// HELPERS
+// ═══════════════════════════════════════════════════════════════
+function fmtTs(ts) {
+    if (!ts) return '—';
+    const d = new Date(ts);
+    if (isNaN(d)) return ts.slice(-8) || '—';
+    const s = (Date.now() - d) / 1000;
+    if (s < 60) return `${Math.floor(s)}s`;
+    if (s < 3600) return `${Math.floor(s/60)}m`;
+    if (s < 86400) return `${Math.floor(s/3600)}h`;
+    return d.toLocaleDateString('en-US', {month:'short', day:'numeric', hour:'2-digit', minute:'2-digit'});
+}
+
+function cls(val, posCls='pos', negCls='neg') {
+    return val >= 0 ? posCls : negCls;
+}
+
+function pnlClass(v) {
+    if (v === null || v === undefined || v === '—') return '';
+    const n = parseFloat(v);
+    if (isNaN(n)) return '';
+    return n > 0 ? 'pos' : n < 0 ? 'neg' : '';
+}
+
+function tagHtml(type) {
+    const m = {
+        'ENTRY': 'tag-green', 'EXIT': 'tag-gray', 'SKIP': 'tag-yellow',
+        'RISK_BLOCK': 'tag-red', 'SIGNAL': 'tag-cyan', 'SYSTEM': 'tag-cyan', 'ERROR': 'tag-red'
+    };
+    return `<span class="tag ${m[type] || 'tag-gray'}">${type}</span>`;
+}
+
+// ═══════════════════════════════════════════════════════════════
+// RENDER: HEADER + KPI
+// ═══════════════════════════════════════════════════════════════
+function renderHeader(hb, health, readiness) {
+    const ok = hb && !hb.error;
+    const mode = (hb?.mode || 'paper').toUpperCase();
+    document.getElementById('modeBadge').textContent = mode;
+    document.getElementById('modeBadge').className = mode === 'PAPER' ? 'badge-paper' : 'badge-locked';
+
+    if (!ok) {
+        document.getElementById('statusStrip').innerHTML = '<span class="badge-locked">OFFLINE</span>';
+        return;
+    }
+
+    const ts = hb.timestamp || '';
+    const age = fmtTs(ts);
+    const uptime = health?.uptime_seconds ? (health.uptime_seconds / 3600).toFixed(0) : '?';
+    const ps = hb.paper_start_date || '';
+    let days = 0;
+    if (ps) {
+        try { days = Math.floor((Date.now() - new Date(ps).getTime()) / 86400000); } catch(e) {}
+    }
+    const ready = readiness?.live_ready || false;
+
+    document.getElementById('statusStrip').innerHTML = `
+        <span class="tag ${ready ? 'tag-green' : 'tag-red'}">${ready ? 'READY' : 'LOCKED'}</span>
+        <span>60s loop</span>
+        <span>♥ ${age}</span>
+        <span>↑ ${uptime}h</span>
+        <span>📅 ${days}/30d</span>
+    `;
+
+    // KPI
+    const perf = hb.total_pnl_pct;
+    const bal = hb.paper_balance || 0;
+    document.getElementById('kpiBalance').textContent = `$${bal.toLocaleString()}`;
+    
+    // Need more detailed metrics from /api/metrics
+    api('metrics').then(m => {
+        document.getElementById('kpiPnl').innerHTML = `<span class="${m?.total_pnl_pct >= 0 ? 'pos' : 'neg'}">${(m?.total_pnl_pct ?? 0).toFixed(2)}%</span>`;
+        document.getElementById('kpiWr').textContent = `${m?.win_rate ?? 0}%`;
+        document.getElementById('kpiPf').textContent = m?.profit_factor ?? '—';
+        document.getElementById('kpiTrades').textContent = m?.total_trades ?? 0;
+    }).catch(() => {});
+
+    // DD from market context
+    api('market').then(mkt => {
+        const dd = mkt?.max_drawdown?.highest_dd_pct || 0;
+        document.getElementById('kpiDd').textContent = `${Math.abs(dd).toFixed(1)}%`;
+        document.getElementById('kpiDd').className = `kpi-value ${dd > 5 ? 'neg' : ''}`;
+    }).catch(() => {});
+}
+
+// ═══════════════════════════════════════════════════════════════
+// RENDER: OVERVIEW
+// ═══════════════════════════════════════════════════════════════
+function renderOverview(equity, ddStats, market, events, positions) {
+    // Equity curve
+    if (charts.equity) charts.equity.destroy();
+    const eqCtx = document.getElementById('chartEquity').getContext('2d');
+    if (equity && equity.length > 1) {
+        const labels = equity.map(e => e.time?.slice(5, 16) || '');
+        const vals = equity.map(e => e.equity);
+        const startEq = equity[0].equity;
+        charts.equity = new Chart(eqCtx, {
+            type: 'line',
+            data: {
+                labels,
+                datasets: [{
+                    data: vals,
+                    borderColor: '#58a6ff',
+                    backgroundColor: 'rgba(88,166,255,0.05)',
+                    borderWidth: 2,
+                    fill: true,
+                    pointRadius: 0,
+                    tension: 0.1,
+                }]
+            },
+            options: {
+                responsive: true, maintainAspectRatio: false,
+                plugins: { legend: { display: false }, tooltip: { callbacks: { label: ctx => `$${ctx.parsed.y.toFixed(2)}` } } },
+                scales: {
+                    x: { display: true, ticks: { color: '#6e7681', font: {size: 9}, maxTicksLimit: 8 }, grid: { display: false } },
+                    y: { display: true, ticks: { color: '#6e7681', font: {size: 9}, callback: v => '$'+v }, grid: { color: '#1c2025' } }
+                }
+            }
+        });
+    } else {
+        eqCtx.canvas.parentElement.innerHTML = '<div class="empty-state">No trade data yet</div>';
+    }
+
+    // Drawdown
+    if (charts.drawdown) charts.drawdown.destroy();
+    if (equity && equity.length > 1) {
+        const labels = equity.map(e => e.time?.slice(5, 16) || '');
+        let peak = equity[0].equity;
+        const ddVals = equity.map(e => {
+            peak = Math.max(peak, e.equity);
+            return (e.equity - peak) / peak * 100;
+        });
+        const ddCtx = document.getElementById('chartDrawdown').getContext('2d');
+        charts.drawdown = new Chart(ddCtx, {
+            type: 'line',
+            data: {
+                labels,
+                datasets: [{
+                    data: ddVals,
+                    borderColor: '#da3633',
+                    backgroundColor: 'rgba(218,54,51,0.08)',
+                    borderWidth: 1.5,
+                    fill: true,
+                    pointRadius: 0,
+                    tension: 0.1,
+                }]
+            },
+            options: {
+                responsive: true, maintainAspectRatio: false,
+                plugins: { legend: { display: false }, tooltip: { callbacks: { label: ctx => `${ctx.parsed.y.toFixed(1)}%` } } },
+                scales: {
+                    x: { display: false },
+                    y: { display: true, ticks: { color: '#6e7681', font: {size: 8}, callback: v => v+'%' }, grid: { color: '#1c2025' } }
+                }
+            }
+        });
+
+        const minDd = Math.min(...ddVals);
+        document.getElementById('ovMaxDd').textContent = `${Math.abs(minDd).toFixed(1)}%`;
+    }
+    document.getElementById('ovCurDd').textContent = ddStats ? `${Math.abs(ddStats?.current_dd_pct || 0).toFixed(1)}%` : '—';
+
+    // Risk cockpit
+    if (market) {
+        const btc = market.btc || {};
+        const fng = market.fear_greed || {};
+        const trust = market.trust_state || {};
+        const mc = market.monte_carlo || {};
+        const opt = market.optimizer || {};
+        const bp = btc.btc_price || 0;
+        const rs = btc.btc_1h_rsi;
+        const rsStr = rs != null ? rs.toFixed(0) : '—';
+        const tl = (trust.label || '—').toUpperCase();
+
+        document.getElementById('riskCockpit').innerHTML = `
+            <div class="metric-row"><span class="metric-label">Trust State</span><span class="metric-val ${tl === 'HIGH' ? 'pos' : 'warn'}">${tl} <span class="kpi-sub">×${trust.multiplier || 1}</span></span></div>
+            <div class="metric-row"><span class="metric-label">₿ BTC</span><span class="metric-val">$${bp.toLocaleString()} <span class="kpi-sub">RSI ${rsStr}</span></span></div>
+            <div class="metric-row"><span class="metric-label">😱 Fear & Greed</span><span class="metric-val">${fng.value || '—'} <span class="kpi-sub">${fng.classification || ''}</span></span></div>
+            <div class="metric-row"><span class="metric-label">🎲 MC 95% DD</span><span class="metric-val">${mc.dd_95_pct || '—'}%</span></div>
+            <div class="metric-row"><span class="metric-label">📦 Optimizer</span><span class="metric-val"><span class="info">${(opt.status || '—').toUpperCase()}</span> <span class="kpi-sub">${opt.trades_needed || 0} trades needed</span></span></div>
+        `;
+    }
+
+    // Activity feed
+    if (events && events.length) {
+        document.getElementById('activityFeed').innerHTML = events.slice(0, 10).map(e =>
+            `<div class="activity-row">
+                <span class="activity-time">${fmtTs(e.timestamp)}</span>
+                ${tagHtml(e.type)}
+                ${e.asset ? `<span style="color:#58a6ff;">${e.asset}</span>` : ''}
+                <span>${(e.message || '').slice(0, 55)}</span>
+            </div>`
+        ).join('');
+    } else {
+        document.getElementById('activityFeed').innerHTML = '<div class="empty-state">No activity yet</div>';
+    }
+
+    // Open positions summary
+    const allPos = {...((positions?.positions || {})), ...((positions?.trend_positions || {}))};
+    const openPos = Object.entries(allPos).filter(([k, v]) => v !== null);
+    if (openPos.length) {
+        document.getElementById('ovPositions').innerHTML = openPos.map(([ak, p]) => {
+            const ep = p.entry_price || 0;
+            const sig = (p.signal || p.strategy || 'long').toUpperCase();
+            const isTrend = (positions?.trend_positions || {})[ak];
+            const sl = isTrend ? 'TREND' : 'REV';
+            return `<div style="background:#0d0f13;border:1px solid #262a30;border-radius:6px;padding:0.5rem 0.65rem;margin-bottom:0.4rem;">
+                <div style="display:flex;justify-content:space-between;align-items:center;">
+                    <span style="font-weight:600;">${ak.replace('_USDT','')}</span>
+                    <div><span class="tag tag-green">${sig}</span> <span class="tag tag-cyan">${sl}</span></div>
+                </div>
+                <div style="font-size:1.15rem;font-weight:600;">$${ep.toFixed(2)}</div>
+                <div class="pos-grid" style="margin-top:0.3rem;">
+                    <div><div class="pos-label">Entry</div><div class="pos-value">$${ep.toFixed(2)}</div></div>
+                </div>
+            </div>`;
+        }).join('');
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// RENDER: READINESS
+// ═══════════════════════════════════════════════════════════════
+function renderReadiness(rdy) {
+    if (!rdy || rdy.error) {
+        document.querySelector('#tabReadiness .panel-row').innerHTML = '<div class="panel" style="color:#da3633;">No readiness data</div>';
+        return;
+    }
+
+    const metrics = [
+        rdy.paper_days_met, rdy.min_trade_count_met, !rdy.sharpe_insufficient_data,
+        rdy.max_drawdown_ok, rdy.uptime_met, rdy.stop_loss_ok, rdy.extremes_ok, rdy.data_integrity_ok
+    ];
+    const met = metrics.filter(Boolean).length;
+    const score = Math.round(met / metrics.length * 100);
+    const ready = rdy.live_ready || false;
+
+    // Gauge
+    const arc = document.getElementById('gaugeArc');
+    const circumference = 2 * Math.PI * 90; // ~565.5
+    const offset = circumference * (1 - score / 100);
+    arc.setAttribute('stroke-dasharray', `${circumference - offset} ${circumference}`);
+    document.getElementById('gaugeScore').textContent = score;
+    document.getElementById('rdyStatus').innerHTML = ready
+        ? '<span class="pos">✅ LIVE READY</span>'
+        : '<span class="neg">🔴 NOT READY</span>';
+
+    // Table
+    const rows = [
+        ['Paper Days', rdy.paper_days_elapsed, `/ ${rdy.required_paper_days}`, rdy.paper_days_met],
+        ['Closed Trades', rdy.total_trades, `/ ${rdy.min_trade_count}`, rdy.min_trade_count_met],
+        ['Sharpe (daily)', rdy.realized_sharpe ?? '—', `≥ ${rdy.min_sharpe}`, rdy.sharpe_met],
+        ['Max Drawdown', `${rdy.max_drawdown_pct}%`, `≤ ${rdy.max_drawdown_limit}%`, rdy.max_drawdown_ok],
+        ['Uptime', `${rdy.uptime_hours}h`, `≥ ${rdy.min_uptime_hours}h`, rdy.uptime_met],
+        ['Stop-Loss Ratio', `${(rdy.stop_loss_ratio * 100).toFixed(0)}%`, `≤ ${(rdy.stop_loss_ratio_limit * 100).toFixed(0)}%`, rdy.stop_loss_ok],
+        ['Data Integrity', rdy.data_integrity_ok ? 'PASS' : 'FAIL', '', rdy.data_integrity_ok],
+        ['Extreme Losses', rdy.extreme_losses, '= 0', rdy.extremes_ok],
+    ];
+    document.querySelector('#rdyTable tbody').innerHTML = rows.map(([name, cur, tgt, met]) =>
+        `<tr><td>${name}</td><td style="text-align:center;">${cur}</td><td style="text-align:center;color:#8b949e;">${tgt}</td><td style="text-align:right;color:${met ? '#2ea043' : '#da3633'};">●</td></tr>`
+    ).join('');
+
+    // Blockers
+    const blockers = rdy.blockers || [];
+    if (blockers.length) {
+        document.getElementById('blockersPanel').style.display = 'block';
+        document.getElementById('blockerList').innerHTML = blockers.map(b => `<div class="blocker">${b}</div>`).join('');
+    } else {
+        document.getElementById('blockersPanel').style.display = 'none';
+    }
+
+    // Summary cards
+    document.querySelectorAll('#rdyCards .panel').forEach((el, i) => {
+        const vals = [
+            [`${rdy.paper_days_elapsed || 0}`, `/ ${rdy.required_paper_days || 30}`],
+            [`${rdy.total_trades || 0}`, `/ ${rdy.min_trade_count || 50}`],
+            [`${((rdy.stop_loss_ratio || 0) * 100).toFixed(0)}%`, `limit ${((rdy.stop_loss_ratio_limit || 0.4) * 100).toFixed(0)}%`],
+            [`${rdy.realized_sharpe ?? '—'}`, `≥ ${rdy.min_sharpe || 0.8}`],
+        ];
+        if (vals[i]) {
+            el.querySelector('div:nth-child(2)').textContent = vals[i][0];
+            el.querySelector('.kpi-sub').textContent = vals[i][1];
+        }
+    });
+}
+
+// ═══════════════════════════════════════════════════════════════
+// RENDER: POSITIONS
+// ═══════════════════════════════════════════════════════════════
+function renderPositions(positions, trades) {
+    const allPos = {...((positions?.positions || {})), ...((positions?.trend_positions || {}))};
+    const openPos = Object.entries(allPos).filter(([k, v]) => v !== null);
+
+    const posContainer = document.getElementById('posCards');
+    if (openPos.length) {
+        posContainer.innerHTML = openPos.map(([ak, p]) => {
+            const ep = p.entry_price || 0;
+            const sig = (p.signal || p.strategy || 'long').toUpperCase();
+            const isTrend = (positions?.trend_positions || {})[ak];
+            const sl = isTrend ? 'TREND' : 'REV';
+            const cs = p.confidence_score || p.enter_confidence;
+            const stop = ep * 0.95;
+            const tp1 = ep * 1.04;
+            const tp2 = ep * 1.095;
+
+            return `<div style="flex:1;min-width:220px;">
+                <div style="background:#0d0f13;border:1px solid #262a30;border-radius:6px;padding:0.6rem 0.75rem;">
+                    <div style="display:flex;justify-content:space-between;align-items:center;">
+                        <span style="font-weight:600;font-size:0.9rem;">${ak.replace('_USDT','')}</span>
+                        <div><span class="tag tag-green">${sig}</span> <span class="tag tag-cyan">${sl}</span></div>
+                    </div>
+                    <div style="font-size:1.2rem;font-weight:600;margin:0.3rem 0;">$${ep.toFixed(2)}</div>
+                    <div class="pos-grid">
+                        <div><div class="pos-label">Confidence</div><div class="pos-value">${cs ? (cs*100).toFixed(0)+'%' : '—'}</div></div>
+                        <div><div class="pos-label">Stop</div><div class="pos-value neg">$${stop.toFixed(2)}</div></div>
+                        <div><div class="pos-label">TP1</div><div class="pos-value pos">$${tp1.toFixed(2)}</div></div>
+                        <div><div class="pos-label">TP2</div><div class="pos-value pos">$${tp2.toFixed(2)}</div></div>
+                    </div>
+                    <div class="kpi-sub" style="margin-top:0.3rem;border-top:1px solid #262a30;padding-top:0.3rem;">Holding because stop not hit and TP1 not reached.</div>
+                </div>
+            </div>`;
+        }).join('');
+    } else {
+        posContainer.innerHTML = '<div class="empty-state">No open positions</div>';
+    }
+
+    // Closed trades table
+    const closed = (trades?.trades || []).filter(t => t.exit_time);
+    
+    // Populate filters
+    const assets = [...new Set(closed.map(t => (t.asset || '').replace('_USDT','')))].sort();
+    const exits = [...new Set(closed.map(t => t.exit_reason || ''))].sort();
+    const assetSel = document.getElementById('posAssetFilter');
+    const exitSel = document.getElementById('posExitFilter');
+    assetSel.innerHTML = '<option value="All">All Assets</option>' + assets.map(a => `<option value="${a}">${a}</option>`).join('');
+    exitSel.innerHTML = '<option value="All">All Exits</option>' + exits.map(e => `<option value="${e}">${e}</option>`).join('');
+
+    function filterPositions() {
+        const sa = assetSel.value;
+        const se = exitSel.value;
+        const so = document.getElementById('posOutcomeFilter').value;
+        let fil = closed;
+        if (sa !== 'All') fil = fil.filter(t => (t.asset || '').includes(sa));
+        if (se !== 'All') fil = fil.filter(t => t.exit_reason === se);
+        if (so === 'Win') fil = fil.filter(t => (t.net_pnl_pct || 0) > 0);
+        if (so === 'Loss') fil = fil.filter(t => (t.net_pnl_pct || 0) <= 0);
+
+        document.querySelector('#posTradesTable tbody').innerHTML = fil.slice(0, 100).map(t => {
+            const pnl = t.net_pnl_pct ?? t.pnl_pct ?? 0;
+            return `<tr>
+                <td>${fmtTs(t.exit_time || t.entry_time)}</td>
+                <td>${(t.asset || '').replace('_USDT','')}</td>
+                <td>$${t.entry_price?.toFixed(2) || '—'}</td>
+                <td>$${t.exit_price?.toFixed(2) || '—'}</td>
+                <td style="color:${pnlClass(pnl) || '#e8eaed'}">${pnl.toFixed(2)}%</td>
+                <td>${(t.exit_reason || '').replace(/_/g,' ')}</td>
+                <td>${t.hours_held ? t.hours_held.toFixed(1)+'h' : '—'}</td>
+            </tr>`;
+        }).join('');
+    }
+
+    assetSel.onchange = filterPositions;
+    exitSel.onchange = filterPositions;
+    document.getElementById('posOutcomeFilter').onchange = filterPositions;
+    filterPositions();
+}
+
+// ═══════════════════════════════════════════════════════════════
+// RENDER: ACTIVITY
+// ═══════════════════════════════════════════════════════════════
+function renderActivity(eventsData) {
+    const events = eventsData?.events || [];
+
+    // Populate filters
+    const types = [...new Set(events.map(e => e.type || '?'))].sort();
+    const assets = [...new Set(events.map(e => e.asset || '').filter(Boolean))].sort();
+    const typeSel = document.getElementById('actTypeFilter');
+    const assetSel = document.getElementById('actAssetFilter');
+    typeSel.innerHTML = '<option value="All">All Types</option>' + types.map(t => `<option value="${t}">${t}</option>`).join('');
+    assetSel.innerHTML = '<option value="All">All Assets</option>' + assets.map(a => `<option value="${a}">${a}</option>`).join('');
+
+    function filterActivity() {
+        const st = typeSel.value;
+        const sa = assetSel.value;
+        let fil = events;
+        if (st !== 'All') fil = fil.filter(e => e.type === st);
+        if (sa !== 'All') fil = fil.filter(e => e.asset === sa);
+
+        document.getElementById('activityFull').innerHTML = fil.slice(0, 80).map(e =>
+            `<div class="activity-row">
+                <span class="activity-time">${fmtTs(e.timestamp)}</span>
+                ${tagHtml(e.type)}
+                ${e.asset ? `<span style="color:#58a6ff;">${e.asset}</span>` : ''}
+                <span>${(e.message || '').slice(0, 80)}</span>
+            </div>`
+        ).join('') || '<div class="empty-state">No matching events</div>';
+    }
+
+    typeSel.onchange = filterActivity;
+    assetSel.onchange = filterActivity;
+    filterActivity();
+}
+
+// ═══════════════════════════════════════════════════════════════
+// RENDER: RESEARCH
+// ═══════════════════════════════════════════════════════════════
+function renderResearch(leaderboard, gates, skips, scores, metrics) {
+    // Leaderboard
+    if (leaderboard && leaderboard.length) {
+        document.querySelector('#lbTable tbody').innerHTML = leaderboard.map(r => {
+            const pnlStr = r['Net PnL'] || '0%';
+            const pnlVal = parseFloat(pnlStr);
+            const pc = isNaN(pnlVal) ? '' : (pnlVal > 0 ? 'pos' : pnlVal < 0 ? 'neg' : '');
+            return `<tr>
+                <td style="font-weight:500;">${r.Asset || r.asset}</td>
+                <td>${r.Trades || r.trades || 0}</td>
+                <td style="color:${pc || '#e8eaed'}">${pnlStr}</td>
+                <td>${r['Win Rate'] || r.win_rate || '—'}</td>
+                <td>${r.PF || r.pf || '—'}</td>
+                <td>${r['Max DD'] || r.max_dd || '—'}</td>
+                <td>${r['Avg Hold'] || r.avg_hold || '—'}</td>
+                <td><span class="tag ${(r.Status || r.status) === 'ACTIVE' ? 'tag-green' : 'tag-gray'}">${r.Status || r.status || '—'}</span></td>
+            </tr>`;
+        }).join('');
+    } else {
+        document.querySelector('#lbTable tbody').innerHTML = '<tr><td colspan="8" class="empty-state">No trade data</td></tr>';
+    }
+
+    // Performance summary
+    if (metrics) {
+        const perfEls = document.querySelectorAll('#perfSummary .kpi-value');
+        if (perfEls.length >= 5) {
+            perfEls[0].innerHTML = `<span class="${metrics.gross_pnl >= 0 ? 'pos' : 'neg'}">${(metrics.gross_pnl || 0).toFixed(2)}%</span>`;
+            perfEls[1].innerHTML = `<span class="${metrics.net_pnl >= 0 ? 'pos' : 'neg'}">${(metrics.net_pnl || 0).toFixed(2)}%</span>`;
+            perfEls[2].innerHTML = `<span class="neg">-${Math.abs(metrics.fees || 0).toFixed(2)}%</span>`;
+            perfEls[3].innerHTML = (metrics.funding || 0).toFixed(2) + '%';
+            perfEls[4].innerHTML = (metrics.expectancy || 0).toFixed(2) + '%';
+        }
+    }
+
+    // Gates
+    if (gates && gates.length) {
+        if (charts.gates) charts.gates.destroy();
+        const gCtx = document.getElementById('chartGates').getContext('2d');
+        const colors = ['#da3633','#d29922','#58a6ff','#2ea043','#8b949e','#da3633','#d29922','#58a6ff','#2ea043','#8b949e'];
+        charts.gates = new Chart(gCtx, {
+            type: 'bar',
+            data: {
+                labels: gates.map(g => g.gate),
+                datasets: [{
+                    data: gates.map(g => g.count),
+                    backgroundColor: colors.slice(0, gates.length),
+                    borderRadius: 2,
+                }]
+            },
+            options: {
+                responsive: true, maintainAspectRatio: false,
+                plugins: { legend: { display: false }, tooltip: { callbacks: { label: ctx => `${ctx.parsed.y} blocks (${gates[ctx.dataIndex].pct}%)` } } },
+                scales: {
+                    x: { ticks: { color: '#6e7681', font: {size: 8} }, grid: { display: false } },
+                    y: { ticks: { color: '#6e7681', font: {size: 9} }, grid: { color: '#1c2025' } }
+                }
+            }
+        });
+
+        // Gate cards
+        document.getElementById('gateCards').innerHTML = gates.slice(0, 5).map(g =>
+            `<div class="panel"><div class="kpi-label">${g.gate}</div><div style="font-size:1.2rem;font-weight:600;">${g.count}</div><div class="kpi-sub">${g.pct}% of blocks</div></div>`
+        ).join('');
+    }
+
+    // Skips
+    if (charts.skips) charts.skips.destroy();
+    if (skips && skips.length) {
+        const sCtx = document.getElementById('chartSkips').getContext('2d');
+        charts.skips = new Chart(sCtx, {
+            type: 'doughnut',
+            data: {
+                labels: skips.map(s => s.Reason || s.reason),
+                datasets: [{
+                    data: skips.map(s => s.Count || s.count || 0),
+                    backgroundColor: ['#da3633','#d29922','#58a6ff','#2ea043','#8b949e','#f7931a','#627eea','#9945ff'],
+                    borderColor: '#0a0c10',
+                    borderWidth: 2,
+                }]
+            },
+            options: {
+                responsive: true, maintainAspectRatio: false,
+                plugins: {
+                    legend: { position: 'right', labels: { color: '#8b949e', font: {size: 9}, boxWidth: 10, padding: 8 } },
+                    tooltip: { callbacks: { label: ctx => `${ctx.label}: ${ctx.parsed} (${((ctx.parsed / skips.reduce((s, r) => s + (r.Count || r.count || 0), 0)) * 100).toFixed(1)}%)` } }
+                }
+            }
+        });
+
+        document.querySelector('#skipTable tbody').innerHTML = skips.map(s =>
+            `<tr><td>${s.Reason || s.reason}</td><td>${s.Count || s.count}</td><td>${s['%'] || s.pct || s.percent || 0}%</td></tr>`
+        ).join('');
+    }
+
+    // Scores
+    if (charts.scores) charts.scores.destroy();
+    if (scores?.scores?.length) {
+        const sc = scores.scores;
+        const bins = 20;
+        const min = 0, max = 1, step = (max - min) / bins;
+        const hist = Array(bins).fill(0);
+        sc.forEach(v => {
+            const idx = Math.min(Math.floor((v - min) / step), bins - 1);
+            hist[idx]++;
+        });
+        const labels = Array.from({length: bins}, (_, i) => ((i * step) + step/2).toFixed(2));
+
+        const scCtx = document.getElementById('chartScores').getContext('2d');
+        charts.scores = new Chart(scCtx, {
+            type: 'bar',
+            data: {
+                labels,
+                datasets: [{
+                    data: hist,
+                    backgroundColor: '#58a6ff',
+                    borderRadius: 1,
+                }]
+            },
+            options: {
+                responsive: true, maintainAspectRatio: false,
+                plugins: {
+                    legend: { display: false },
+                    annotation: false,
+                },
+                scales: {
+                    x: { ticks: { color: '#6e7681', font: {size: 8}, maxTicksLimit: 10 }, grid: { display: false } },
+                    y: { ticks: { color: '#6e7681', font: {size: 9} }, grid: { color: '#1c2025' } }
+                }
+            }
+        });
+
+        // Add threshold line via plugin
+        // (Chart.js annotation plugin would require extra CDN load, skip for now)
+
+        const arr = sc;
+        const sorted = [...arr].sort((a,b) => a-b);
+        const mean = arr.reduce((s,v) => s+v, 0) / arr.length;
+        const median = sorted.length % 2 ? sorted[Math.floor(sorted.length/2)] : (sorted[sorted.length/2-1] + sorted[sorted.length/2]) / 2;
+        const above = arr.filter(v => v >= 0.55).length;
+        const below = arr.filter(v => v < 0.55).length;
+
+        document.querySelectorAll('#scoreCards .kpi-value').forEach((el, i) => {
+            const vals = [mean.toFixed(3), median.toFixed(3), above, below];
+            if (vals[i] !== undefined) el.textContent = vals[i];
+        });
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// MAIN REFRESH LOOP
+// ═══════════════════════════════════════════════════════════════
+async function refresh() {
+    try {
+        const [hb, health, readiness, trades, positions, equity, events, market, leaderboard, gates, skips, scores, metrics] = await Promise.all([
+            api('status'), api('health'), api('readiness'), api('trades'), api('positions'),
+            api('equity'), api('events?limit=50'), api('market'), api('leaderboard'),
+            api('gates'), api('skips'), api('scores'), api('metrics'),
+        ]);
+
+        renderHeader(hb, health, readiness);
+
+        // Only render current active tab's content
+        const activeTab = document.querySelector('.tab-content.active')?.id || 'tabOverview';
+        
+        if (activeTab === 'tabOverview') {
+            const ddStats = market?.max_drawdown || null;
+            renderOverview(equity, ddStats, market, events, positions);
+        }
+        if (activeTab === 'tabReadiness') {
+            renderReadiness(readiness);
+        }
+        if (activeTab === 'tabPositions') {
+            renderPositions(positions, trades);
+        }
+        if (activeTab === 'tabActivity') {
+            renderActivity(events);
+        }
+        if (activeTab === 'tabResearch') {
+            renderResearch(leaderboard, gates, skips, scores, metrics);
+        }
+
+    } catch (e) {
+        console.error('Refresh error:', e);
+        document.getElementById('statusStrip').innerHTML = `<span class="badge-locked">ERROR</span> <span class="text-muted">${e.message}</span>`;
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// INIT
+// ═══════════════════════════════════════════════════════════════
+document.addEventListener('DOMContentLoaded', () => {
+    refresh();
+    setInterval(refresh, 30000);
+});
+</script>
+</body>
+</html>

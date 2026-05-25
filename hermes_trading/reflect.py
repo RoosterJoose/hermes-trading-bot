@@ -412,6 +412,107 @@ def summarize(state_dir: Path, asset_key: str, goal: dict, trades: list) -> str:
         lines.append(f"   ~0R: {zero_r} | ±0.1-0.5R: {small_r} | ±0.5-1.5R: {mid_r} | ±1.5R+: {big_r}")
         lines.append(f"   ⚠️  If most trades cluster at ~0R, exit is the problem — add/modify exit params")
 
+        # ── Rolling 20-trade win-rate (win-rate velocity) ──
+        recent_20 = trades[-20:] if len(trades) >= 20 else trades
+        r20_wins = sum(1 for t in recent_20 if t.get("pnl_pct", 0) > 0)
+        r20_total = len(recent_20)
+        r20_wr = r20_wins / r20_total * 100 if r20_total > 0 else 0
+        wr_delta = r20_wr - win_rate if r20_total > 0 else 0
+        wr_emoji = "🚀" if wr_delta > 5 else ("⚠️" if wr_delta < -5 else "➡️")
+        lines.append(f"\n📈 Win-Rate Velocity:")
+        lines.append(f"   Cumulative WR ({len(trades)}t): {win_rate:.0f}% | "
+                      f"Recent WR ({r20_total}t): {r20_wr:.0f}% ({wr_emoji} Δ{wr_delta:+.0f}pp)")
+        if wr_delta < -5:
+            lines.append(f"   ⚠️  Recent WR {r20_wr:.0f}% significantly below cumulative — possible regime shift or strategic drift")
+
+        # ── Expectancy momentum: recent avg R vs all-time baseline ──
+        r20_r = [t.get("pnl_pct", 0) / sl_pct if sl_pct else 0 for t in recent_20]
+        r20_avg_r = sum(r20_r) / len(r20_r) if r20_r else 0
+        r_delta = r20_avg_r - avg_r
+        expect_emoji = "📈" if r_delta > 0.1 else ("📉" if r_delta < -0.1 else "➡️")
+        lines.append(f"\n🎲 Expectancy Momentum:")
+        lines.append(f"   Baseline avg R: {avg_r:.2f} | Recent avg R: {r20_avg_r:.2f} ({expect_emoji} Δ{r_delta:+.2f}R)")
+        if r_delta < -0.1:
+            lines.append(f"   ⚠️  Recent R-multiples decaying vs baseline — edge may be contracting")
+        elif wr_delta < -5 and r_delta > 0.1:
+            lines.append(f"   💡 WR dropping but R increasing — entry problem (wrong setups win rarely but big)")
+        elif wr_delta > 5 and r_delta < -0.1:
+            lines.append(f"   💡 WR rising but R compressing — exit problem (winning small, need to optimize exits)")
+
+        # ── Duration vs R-Multiple correlation ──
+        duration_data = []
+        for t in trades:
+            pnl = t.get("pnl_pct", 0)
+            hrs = t.get("hours_held")
+            if hrs is None:
+                # Derive from timestamps if hours_held not in old trades
+                et = t.get("entry_time", "")
+                xt = t.get("exit_time", "")
+                if et and xt:
+                    try:
+                        from datetime import datetime, timezone
+                        hrs = (datetime.fromisoformat(xt) - datetime.fromisoformat(et)).total_seconds() / 3600
+                    except (ValueError, TypeError):
+                        continue
+            if hrs is not None and hrs >= 0:
+                duration_data.append((hrs, pnl))
+        if duration_data:
+            win_durations = [d for d in duration_data if d[1] > 0]
+            loss_durations = [d for d in duration_data if d[1] <= 0]
+            avg_win_hrs = sum(d[0] for d in win_durations) / len(win_durations) if win_durations else 0
+            avg_loss_hrs = sum(d[0] for d in loss_durations) / len(loss_durations) if loss_durations else 0
+            avg_hrs_all = sum(d[0] for d in duration_data) / len(duration_data)
+            # Correlation: quick Pearson r between hours and PnL
+            if len(duration_data) >= 8:
+                n = len(duration_data)
+                h_mean = sum(d[0] for d in duration_data) / n
+                p_mean = sum(d[1] for d in duration_data) / n
+                num = sum((d[0] - h_mean) * (d[1] - p_mean) for d in duration_data)
+                den = (sum((d[0] - h_mean)**2 for d in duration_data) ** 0.5 *
+                       sum((d[1] - p_mean)**2 for d in duration_data) ** 0.5)
+                dur_r = num / den if den != 0 else 0
+            else:
+                dur_r = 0
+            lines.append(f"\n⏱️ Duration vs R-Multiple ({len(duration_data)} trades):")
+            lines.append(f"   Avg hold: {avg_hrs_all:.1f}h | Winners: {avg_win_hrs:.1f}h | Losers: {avg_loss_hrs:.1f}h")
+            lines.append(f"   Duration-PnL correlation: r={dur_r:.3f}")
+            if dur_r < -0.3:
+                lines.append(f"   ⚠️  Negative correlation: longer holds = worse outcomes — tighten time_exit_cycles")
+            elif dur_r > 0.3:
+                lines.append(f"   ✅ Positive correlation: winners benefit from longer holds — consider widening time_exit_cycles")
+            if avg_win_hrs < avg_loss_hrs and avg_loss_hrs > 0:
+                lines.append(f"   💡 Losers held {avg_loss_hrs / max(avg_win_hrs, 0.1):.1f}x longer than winners — time stop could improve expectancy")
+
+        # ── Regime-conditioned performance splits ──
+        regimes = {}
+        for t in trades:
+            regime = t.get("market_regime_entry", "Unknown")
+            pnl = t.get("pnl_pct", 0)
+            if regime not in regimes:
+                regimes[regime] = {"count": 0, "pnls": []}
+            regimes[regime]["count"] += 1
+            regimes[regime]["pnls"].append(pnl)
+        if len(regimes) > 1:
+            lines.append(f"\n🌍 Regime-Conditioned Performance:")
+            for regime, data in sorted(regimes.items(), key=lambda x: -sum(x[1]["pnls"])):
+                r_pnls = data["pnls"]
+                r_wins = sum(1 for p in r_pnls if p > 0)
+                r_wr = r_wins / data["count"] * 100
+                lines.append(
+                    f"   {regime}: {data['count']}t | WR {r_wr:.0f}% | "
+                    f"avg {sum(r_pnls)/len(r_pnls):+.2f}% | total {sum(r_pnls):+.2f}%"
+                )
+            # Flag if best and worst regimes are far apart
+            sorted_regimes = sorted(regimes.items(), key=lambda x: sum(x[1]["pnls"])/len(x[1]["pnls"]))
+            if len(sorted_regimes) >= 2:
+                best_r = sorted_regimes[-1]
+                worst_r = sorted_regimes[0]
+                spread = sum(best_r[1]["pnls"])/len(best_r[1]["pnls"]) - sum(worst_r[1]["pnls"])/len(worst_r[1]["pnls"])
+                if spread > 0.5:
+                    lines.append(f"   💡 Best regime: {best_r[0]} ({sum(best_r[1]['pnls'])/len(best_r[1]['pnls']):+.2f}% avg) vs "
+                                  f"Worst: {worst_r[0]} ({sum(worst_r[1]['pnls'])/len(worst_r[1]['pnls']):+.2f}% avg) — "
+                                  f"optimize params for the regime that actually produced trades")
+
         # Recent trades
         lines.append(f"\n📈 Recent Trades (last 5):")
         for t in trades[-5:]:
@@ -507,8 +608,10 @@ def summarize(state_dir: Path, asset_key: str, goal: dict, trades: list) -> str:
             if fng_g:
                 fng_str = f" fng>{fng_g.get('min_value', '?')}"
             cool = hist.get("cooldown_cycles", "?")
+            te = hist.get("time_exit_cycles", "")
+            te_str = f" timeExit={te}" if te else ""
             lines.append(
-                f"   {hf.name}: stop={hist.get('stop_loss_pct', '?')}% | entry={hist.get('entry', {}).get('threshold', '?')} | cooldown={cool}{btc_gate_str}{fng_str}"
+                f"   {hf.name}: stop={hist.get('stop_loss_pct', '?')}% | entry={hist.get('entry', {}).get('threshold', '?')} | cooldown={cool}{btc_gate_str}{fng_str}{te_str}"
             )
 
     # Hypotheses
@@ -549,6 +652,10 @@ def summarize(state_dir: Path, asset_key: str, goal: dict, trades: list) -> str:
         )
         lines.append(
             f"   - evaluator.min_candle_position (current: {ev.get('min_candle_position', 0.3)})\n"
+        )
+        time_exit = current.get("time_exit_cycles", 60 if ("BTC" in asset_key or "ETH" in asset_key) else 45)
+        lines.append(
+            f"   - time_exit_cycles (current: {time_exit}) — max hours before time-based exit (MR sleeve)"
         )
         exit_min_r = current.get("scale_out_min_R", 0.3)
         lines.append(
@@ -702,7 +809,7 @@ def _gatekeeper(
         current_value = strategy.get("btc_gate", {}).get("min_btc_1h_rsi", 20)
         proposed_value = min(45, current_value + 5)
 
-    elif "scale_out" in action or "tp2_target" in action or "chandelier_mult" in action:
+    elif "scale_out" in action or "tp2_target" in action or "chandelier_mult" in action or "time_exit" in action:
         change_type = "exit_params"
         if completed_trades < 10:
             return {
@@ -720,6 +827,12 @@ def _gatekeeper(
             cur = strategy.get(key, 1.5)
             prop = strategy.get(key, 1.5)
             limit = 0.5
+        elif "time_exit" in action:
+            key = "time_exit_cycles"
+            is_major = "BTC" in asset_key or "ETH" in asset_key
+            cur = strategy.get(key, 60 if is_major else 45)
+            prop = strategy.get(key, 60 if is_major else 45)
+            limit = 20  # max 20-hour change per cycle
         else:
             key = "chandelier_mult_alts" if "alts" in action else "chandelier_mult_major"
             cur = strategy.get(key, 4.0 if "alts" in action else 2.5)
@@ -927,13 +1040,53 @@ def fallback_reflect(state_dir: Path, asset_key: str, goal: dict, trades: list):
                 f"{current_min_r} to {new_min_r} to let runners develop."
             )
         else:
-            # Generic: loosen entry threshold to catch more signals
-            current_threshold = strategy.get("entry", {}).get("threshold", 30)
-            strategy["entry"]["threshold"] = min(45, current_threshold + 2)
-            hypothesis["action"] = "loosen_entry_threshold"
-            hypothesis["reasoning"] = (
-                f"Return under target. Loosened entry.threshold from {current_threshold} to {strategy['entry']['threshold']}"
-            )
+            # Check duration-PnL correlation
+            dur_data = []
+            for t in trades:
+                hrs = t.get("hours_held")
+                if hrs is None:
+                    et, xt = t.get("entry_time", ""), t.get("exit_time", "")
+                    if et and xt:
+                        try:
+                            from datetime import datetime, timezone
+                            hrs = (datetime.fromisoformat(xt) - datetime.fromisoformat(et)).total_seconds() / 3600
+                        except (ValueError, TypeError):
+                            continue
+                if hrs is not None and hrs >= 0:
+                    dur_data.append((hrs, t.get("pnl_pct", 0)))
+            if dur_data and len(dur_data) >= 8:
+                win_d = [d for d in dur_data if d[1] > 0]
+                loss_d = [d for d in dur_data if d[1] <= 0]
+                avg_win_hrs = sum(d[0] for d in win_d) / len(win_d) if win_d else 0
+                avg_loss_hrs = sum(d[0] for d in loss_d) / len(loss_d) if loss_d else 0
+                if avg_loss_hrs > avg_win_hrs * 2 and avg_win_hrs > 0:
+                    # Losers held much longer — tighten time stop
+                    is_major = "BTC" in asset_key or "ETH" in asset_key
+                    cur = strategy.get("time_exit_cycles", 60 if is_major else 45)
+                    new_val = max(12, cur - 15 if cur > 30 else cur - 8)
+                    strategy["time_exit_cycles"] = new_val
+                    hypothesis["action"] = "tighten_time_exit"
+                    hypothesis["reasoning"] = (
+                        f"Underperforming: losers held {avg_loss_hrs/avg_win_hrs:.1f}x longer than winners "
+                        f"({avg_loss_hrs:.0f}h vs {avg_win_hrs:.0f}h). "
+                        f"Tightened time_exit_cycles from {cur} to {new_val}h."
+                    )
+                else:
+                    # Generic: loosen entry threshold to catch more signals
+                    current_threshold = strategy.get("entry", {}).get("threshold", 30)
+                    strategy["entry"]["threshold"] = min(45, current_threshold + 2)
+                    hypothesis["action"] = "loosen_entry_threshold"
+                    hypothesis["reasoning"] = (
+                        f"Return under target. Loosened entry.threshold from {current_threshold} to {strategy['entry']['threshold']}"
+                    )
+            else:
+                # Generic: loosen entry threshold to catch more signals
+                current_threshold = strategy.get("entry", {}).get("threshold", 30)
+                strategy["entry"]["threshold"] = min(45, current_threshold + 2)
+                hypothesis["action"] = "loosen_entry_threshold"
+                hypothesis["reasoning"] = (
+                    f"Return under target. Loosened entry.threshold from {current_threshold} to {strategy['entry']['threshold']}"
+                )
 
     elif overall > 0.3:
         # Overperforming — take a bit more risk
@@ -949,12 +1102,51 @@ def fallback_reflect(state_dir: Path, asset_key: str, goal: dict, trades: list):
                 f"to avoid over-constraining TP1."
             )
         else:
-            current_sl = strategy.get("stop_loss_pct", 2.0)
-            strategy["stop_loss_pct"] = round(min(5.0, current_sl + 0.1), 2)
-            hypothesis["action"] = "widen_stop_loss"
-            hypothesis["reasoning"] = (
-                f"Good performance. Widened stop_loss_pct from {current_sl} to {strategy['stop_loss_pct']} to capture more upside"
-            )
+            # Check duration to see if widening time exit could help winners grow
+            dur_data = []
+            for t in trades:
+                hrs = t.get("hours_held")
+                if hrs is None:
+                    et, xt = t.get("entry_time", ""), t.get("exit_time", "")
+                    if et and xt:
+                        try:
+                            from datetime import datetime, timezone
+                            hrs = (datetime.fromisoformat(xt) - datetime.fromisoformat(et)).total_seconds() / 3600
+                        except (ValueError, TypeError):
+                            continue
+                if hrs is not None and hrs >= 0:
+                    dur_data.append((hrs, t.get("pnl_pct", 0)))
+            if dur_data and len(dur_data) >= 8:
+                win_d = [d for d in dur_data if d[1] > 0]
+                loss_d = [d for d in dur_data if d[1] <= 0]
+                avg_win_hrs = sum(d[0] for d in win_d) / len(win_d) if win_d else 0
+                avg_loss_hrs = sum(d[0] for d in loss_d) / len(loss_d) if loss_d else 0
+                if avg_win_hrs > 0 and avg_win_hrs > avg_loss_hrs * 1.5:
+                    # Winners benefit from longer holds — widen time exit
+                    is_major = "BTC" in asset_key or "ETH" in asset_key
+                    cur = strategy.get("time_exit_cycles", 60 if is_major else 45)
+                    new_val = min(120, cur + 20)
+                    strategy["time_exit_cycles"] = new_val
+                    hypothesis["action"] = "widen_time_exit"
+                    hypothesis["reasoning"] = (
+                        f"Good performance and winners held {avg_win_hrs/avg_loss_hrs:.1f}x longer than losers "
+                        f"({avg_win_hrs:.0f}h vs {avg_loss_hrs:.0f}h). "
+                        f"Widened time_exit_cycles from {cur} to {new_val}h to let runners develop further."
+                    )
+                else:
+                    current_sl = strategy.get("stop_loss_pct", 2.0)
+                    strategy["stop_loss_pct"] = round(min(5.0, current_sl + 0.1), 2)
+                    hypothesis["action"] = "widen_stop_loss"
+                    hypothesis["reasoning"] = (
+                        f"Good performance. Widened stop_loss_pct from {current_sl} to {strategy['stop_loss_pct']} to capture more upside"
+                    )
+            else:
+                current_sl = strategy.get("stop_loss_pct", 2.0)
+                strategy["stop_loss_pct"] = round(min(5.0, current_sl + 0.1), 2)
+                hypothesis["action"] = "widen_stop_loss"
+                hypothesis["reasoning"] = (
+                    f"Good performance. Widened stop_loss_pct from {current_sl} to {strategy['stop_loss_pct']} to capture more upside"
+                )
 
     else:
         # Neutral performance — diagnose
@@ -980,13 +1172,65 @@ def fallback_reflect(state_dir: Path, asset_key: str, goal: dict, trades: list):
                 f"to make TP2 more achievable."
             )
         else:
-            # Tighten threshold slightly
-            current_threshold = strategy.get("entry", {}).get("threshold", 30)
-            strategy["entry"]["threshold"] = max(20, current_threshold - 1)
-            hypothesis["action"] = "tighten_entry_slightly"
-            hypothesis["reasoning"] = (
-                f"Neutral performance. Tightened entry.threshold from {current_threshold} to {strategy['entry']['threshold']}"
-            )
+            # Neutral: check if time-based exit is cutting winners short
+            dur_data = []
+            for t in trades:
+                hrs = t.get("hours_held")
+                if hrs is None:
+                    et, xt = t.get("entry_time", ""), t.get("exit_time", "")
+                    if et and xt:
+                        try:
+                            from datetime import datetime, timezone
+                            hrs = (datetime.fromisoformat(xt) - datetime.fromisoformat(et)).total_seconds() / 3600
+                        except (ValueError, TypeError):
+                            continue
+                if hrs is not None and hrs >= 0:
+                    dur_data.append((hrs, t.get("pnl_pct", 0)))
+            if dur_data and len(dur_data) >= 8:
+                win_d = [d for d in dur_data if d[1] > 0]
+                loss_d = [d for d in dur_data if d[1] <= 0]
+                avg_win_hrs = sum(d[0] for d in win_d) / len(win_d) if win_d else 0
+                avg_loss_hrs = sum(d[0] for d in loss_d) / len(loss_d) if loss_d else 0
+                if avg_loss_hrs > avg_win_hrs * 1.5 and avg_win_hrs > 0:
+                    # Losers held longer — tighten time exit
+                    is_major = "BTC" in asset_key or "ETH" in asset_key
+                    cur = strategy.get("time_exit_cycles", 60 if is_major else 45)
+                    new_val = max(12, cur - 10)
+                    strategy["time_exit_cycles"] = new_val
+                    hypothesis["action"] = "tighten_time_exit"
+                    hypothesis["reasoning"] = (
+                        f"Neutral with duration imbalance: losers held {avg_loss_hrs/avg_win_hrs:.1f}x longer "
+                        f"({avg_loss_hrs:.0f}h vs {avg_win_hrs:.0f}h). "
+                        f"Tightened time_exit_cycles from {cur} to {new_val}h."
+                    )
+                elif avg_win_hrs > avg_loss_hrs * 2 and avg_loss_hrs > 0:
+                    # Winners clearly need time — widen
+                    is_major = "BTC" in asset_key or "ETH" in asset_key
+                    cur = strategy.get("time_exit_cycles", 60 if is_major else 45)
+                    new_val = min(120, cur + 15)
+                    strategy["time_exit_cycles"] = new_val
+                    hypothesis["action"] = "widen_time_exit"
+                    hypothesis["reasoning"] = (
+                        f"Neutral with winners needing time: held {avg_win_hrs/avg_loss_hrs:.1f}x longer "
+                        f"({avg_win_hrs:.0f}h vs {avg_loss_hrs:.0f}h). "
+                        f"Widened time_exit_cycles from {cur} to {new_val}h."
+                    )
+                else:
+                    # Tighten threshold slightly
+                    current_threshold = strategy.get("entry", {}).get("threshold", 30)
+                    strategy["entry"]["threshold"] = max(20, current_threshold - 1)
+                    hypothesis["action"] = "tighten_entry_slightly"
+                    hypothesis["reasoning"] = (
+                        f"Neutral performance. Tightened entry.threshold from {current_threshold} to {strategy['entry']['threshold']}"
+                    )
+            else:
+                # Tighten threshold slightly
+                current_threshold = strategy.get("entry", {}).get("threshold", 30)
+                strategy["entry"]["threshold"] = max(20, current_threshold - 1)
+                hypothesis["action"] = "tighten_entry_slightly"
+                hypothesis["reasoning"] = (
+                    f"Neutral performance. Tightened entry.threshold from {current_threshold} to {strategy['entry']['threshold']}"
+                )
 
     strategy["version"] = new_ver
 
@@ -1022,6 +1266,7 @@ def fallback_reflect(state_dir: Path, asset_key: str, goal: dict, trades: list):
         "tp2_target_R": strategy.get("tp2_target_R"),
         "chandelier_mult_alts": strategy.get("chandelier_mult_alts"),
         "chandelier_mult_major": strategy.get("chandelier_mult_major"),
+        "time_exit_cycles": strategy.get("time_exit_cycles"),
     }
 
     write_strategy(state_dir, asset_key, strategy)
