@@ -40,8 +40,8 @@ hurst:
   block_on_trending: true
   enabled: true
   min_bars: 500
-  mr_threshold: 0.45
-  trend_threshold: 0.55
+  mr_threshold: 0.40
+  trend_threshold: 0.63
 kill_switches:
   enabled: true
   max_daily_loss_pct: 2.5

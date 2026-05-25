@@ -245,8 +245,8 @@ def compute_hurst_exponent(
     Config keys (from strategy.yaml hurst section):
       enabled (bool)            — master switch (default: True)
       min_bars (int)            — minimum bars before activating (default: 500)
-      mr_threshold (float)      — H below this = mean-reverting (default: 0.45)
-      trend_threshold (float)   — H above this = trending (default: 0.55)
+      mr_threshold (float)      — H below this = mean-reverting (default: 0.40)
+      trend_threshold (float)   — H above this = trending (default: 0.63)
       block_on_trending (bool)  — whether to block entries when trending (default: True)
 
     Returns dict:
@@ -270,8 +270,8 @@ def compute_hurst_exponent(
         return result
 
     min_bars = config.get("min_bars", 500)
-    mr_threshold = config.get("mr_threshold", 0.45)
-    trend_threshold = config.get("trend_threshold", 0.55)
+    mr_threshold = config.get("mr_threshold", 0.40)
+    trend_threshold = config.get("trend_threshold", 0.63)
     block_on_trending = config.get("block_on_trending", True)
 
     closes, bar_count = _read_1m_closes(asset_key)

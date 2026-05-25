@@ -926,15 +926,15 @@ class TradingLoop:
         hurst_signal = None
         h = hurst.get("hurst")
         if h is not None and hurst.get("active"):
-            if h > 0.55:
+            regime = hurst.get("regime", "random_walk")
+            if regime in ("trending", "strongly_trending"):
                 hurst_mode = "trend"
-                hurst_signal = False
-                print(f"  {asset_key}: 📈 Trending (H={h:.3f}) — MR disabled")
-            elif h < 0.45:
+                print(f"  {asset_key}: 📈 Trending regime (H={h:.3f}) — MR entries use trend scoring")
+            elif regime in ("mean_reverting", "strongly_mean_reverting"):
                 hurst_mode = "mean_reversion"
                 hurst_signal = rsi is not None and rsi < effective_threshold
                 print(
-                    f"  {asset_key}: 🔄 MR mode (H={h:.3f}) — oversold entries (RSI<{effective_threshold})"
+                    f"  {asset_key}: 🔄 MR regime (H={h:.3f}) — oversold entries (RSI<{effective_threshold})"
                 )
             else:
                 hurst_mode = "random_walk"
@@ -2219,7 +2219,7 @@ class TradingLoop:
         # R_base from spec: 1.0% of account equity
         r_base = ps.get("r_base", 0.01)
 
-        # Halve for random-walk regime (0.45 < H ≤ 0.55)
+        # Halve for random-walk regime
         if hurst_mode == "random_walk":
             r_base *= 0.5
 
