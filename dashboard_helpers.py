@@ -427,7 +427,9 @@ def get_gate_attribution() -> list:
                         total_skips += 1
                         # Categorize the block reason
                         r = (reason or "").lower()
-                        if "kill" in r or "max_consecutive" in r or "consecutive" in r:
+                        if "volume" in r or "vol <" in r:
+                            gate_counts["Volume Filter"] += 1
+                        elif "consecutive" in r or "max_consecutive" in r:
                             gate_counts["Consecutive Losses"] += 1
                         elif "hurst" in r:
                             gate_counts["Hurst Regime"] += 1
@@ -437,8 +439,6 @@ def get_gate_attribution() -> list:
                             gate_counts["ADX Danger Zone"] += 1
                         elif "correlation" in r:
                             gate_counts["Correlation Cap"] += 1
-                        elif "volume" in r or "vol check" in r:
-                            gate_counts["Volume Filter"] += 1
                         elif "confidence" in r or "low_confidence" in r:
                             gate_counts["Low Confidence"] += 1
                         elif "open" in r and "max" in r:

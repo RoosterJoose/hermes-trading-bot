@@ -155,7 +155,7 @@ class TradingLoop:
         self.trend_1h_ready: Dict[str, bool] = {a["key"]: False for a in assets}
         self.trend_cooldown: Dict[str, int] = {}  # cycles since last trend entry
         self.max_concurrent_total = 3  # max 3-4 total across both sleeves
-        self.trend_universe = {"BTC_USDT", "ETH_USDT", "SOL_USDT", "XRP_USDT", "BNB_USDT", "DOGE_USDT", "AVAX_USDT"}
+        self.trend_universe = {"BTC_USDT", "ETH_USDT", "SOL_USDT", "XRP_USDT", "BNB_USDT", "DOGE_USDT", "AVAX_USDT", "NEAR_USDT"}
 
         # Portfolio-level daily loss hard halt (stops ALL entries)
         self.portfolio_hard_halt_pct = 4.0  # -4% portfolio daily → global halt
@@ -827,6 +827,15 @@ class TradingLoop:
         if current_price <= 0:
             return
 
+        # ── Consecutive losses decay: reduce streak if asset has been idle ──
+        cl = self.consecutive_losses.get(asset_key, 0)
+        if cl > 0:
+            idle_cycles = self.cycles_since_last_trade.get(asset_key, 0)
+            decay_threshold = max(50, cl * 25)  # more aggressive decay for longer streaks
+            if idle_cycles >= decay_threshold:
+                self.consecutive_losses[asset_key] = max(0, cl - 1)
+                self.paused_assets.pop(asset_key, None)
+                print(f"🔁 {asset_key}: consec loss streak decayed {cl}→{cl-1} after {idle_cycles} idle cycles")
         # ── 4. Calculate RSI from candle data ──
         candles = price_data.get("candles", [])
         rsi = None
@@ -2095,14 +2104,14 @@ class TradingLoop:
                 f"KILL: {cl} consecutive losses (max {max_cl}) — asset paused",
             )
 
-        # Microstructure volume filter: exclude assets with < $5M 24h volume
+        # Microstructure volume filter: exclude assets with < $1M 24h volume (paper account)
         if self.hl_context.get("available"):
             symbol = asset_key.split("_")[0]
             hl_asset = self.hl_context.get("assets", {}).get(symbol)
             if hl_asset:
                 vol_24h = hl_asset.get("volume_24h", 0)
-                if vol_24h is not None and vol_24h < 5_000_000:
-                    return (False, f"KILL: {symbol} vol ${vol_24h / 1e6:.1f}M < $5M")
+                if vol_24h is not None and vol_24h < 1_000_000:
+                    return (False, f"KILL: {symbol} vol ${vol_24h / 1e6:.1f}M < $1M")
 
         # OI Velocity gate: > 15% OI expansion in ~48h = institutional trend-building
         if len(self.oi_snapshots) > 0:

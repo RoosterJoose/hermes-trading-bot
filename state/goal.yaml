@@ -23,6 +23,10 @@ assets:
   target_return_30d: 0.15
   max_drawdown: 0.08
   min_sharpe: 1.0
+- key: NEAR_USDT
+  target_return_30d: 0.15
+  max_drawdown: 0.08
+  min_sharpe: 1.0
 - key: ADA_USDT
   target_return_30d: 0.1
   max_drawdown: 0.05

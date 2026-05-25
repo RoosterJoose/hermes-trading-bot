@@ -65,7 +65,14 @@ def read_pid(name: str) -> int | None:
 
 
 def is_alive(pid: int | None) -> bool:
-    return pid is not None and os.kill(pid, 0) is None
+    """Check if a process is alive using kill(0). Returns False on any error."""
+    if pid is None:
+        return False
+    try:
+        os.kill(pid, 0)
+        return True
+    except (ProcessLookupError, PermissionError, OSError):
+        return False
 
 
 def kill_all(pattern: str, exclude_pid: int | None = None):

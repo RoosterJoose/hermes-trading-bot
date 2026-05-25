@@ -26,6 +26,7 @@ CG_IDS = {
     "LINK_USDT": "chainlink",
     "AVAX_USDT": "avalanche-2",
     "DOT_USDT": "polkadot",
+    "NEAR_USDT": "near",
 }
 
 
