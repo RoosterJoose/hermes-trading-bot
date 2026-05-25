@@ -112,6 +112,8 @@ export default function HermesDashboard() {
   const [liveSharpe, setLiveSharpe] = useState<number | null>(null);
   const [liveStopLossRatio, setLiveStopLossRatio] = useState<number>(0);
   const [liveMinTradeCount, setLiveMinTradeCount] = useState<number>(100);
+  const [liveOpenPositionsCount, setLiveOpenPositionsCount] = useState<number>(0);
+  const [liveMaxPositions, setLiveMaxPositions] = useState<number>(5);
 
   // Use live API values when available, fall back to simulation from readinessScore
   const paperDays = useMemo(() => {
@@ -302,6 +304,8 @@ export default function HermesDashboard() {
         if (data.sharpeRatio !== undefined && data.sharpeRatio !== null) setLiveSharpe(data.sharpeRatio);
         if (data.stopLossRatio !== undefined) setLiveStopLossRatio(data.stopLossRatio);
         if (data.minTradeCount !== undefined) setLiveMinTradeCount(data.minTradeCount);
+        if (data.openPositionsCount !== undefined) setLiveOpenPositionsCount(data.openPositionsCount);
+        if (data.maxPositions !== undefined) setLiveMaxPositions(data.maxPositions);
         
         // Update activity feed
         if (data.activityEvents && Array.isArray(data.activityEvents)) {
@@ -623,7 +627,7 @@ export default function HermesDashboard() {
           <div className="p-2 bg-[#0a0c0e] rounded-sm border border-slate-800 flex flex-col min-w-[120px]">
             <span className="text-slate-500 uppercase text-[9px] tracking-wider">Open Positions</span>
             <div className="flex items-baseline justify-between mt-1">
-              <span className="text-lg font-bold text-white">2 / 5</span>
+              <span className="text-lg font-bold text-white">{liveOpenPositionsCount} / {liveMaxPositions}</span>
               <span className="text-slate-600 text-[10px]">Active Slots</span>
             </div>
           </div>
