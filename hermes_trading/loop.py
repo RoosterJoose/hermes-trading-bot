@@ -166,10 +166,15 @@ class TradingLoop:
         self.event_cal_blackout: Optional[Dict] = None  # Blocked state from is_near_macro_event()
         self._init_event_calendar()
 
-        # Paper balance tracking (dollar PnL)
+        # Paper balance tracking (dollar PnL) — persist start date across restarts
         self.initial_balance = initial_balance
         self.paper_balance = initial_balance
-        self.paper_start_date = datetime.now(timezone.utc).date().isoformat()
+        start_date_file = self.state_dir / "paper_start_date.txt"
+        if start_date_file.exists():
+            self.paper_start_date = start_date_file.read_text().strip()
+        else:
+            self.paper_start_date = datetime.now(timezone.utc).date().isoformat()
+            start_date_file.write_text(self.paper_start_date)
 
         # Trust-state scaling (unified risk score)
         self.trust_multiplier: float = 1.0
