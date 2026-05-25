@@ -159,7 +159,8 @@ class TradingLoop:
 
         # Portfolio-level daily loss hard halt (stops ALL entries)
         self.portfolio_hard_halt_pct = 4.0  # -4% portfolio daily → global halt
-        self.portfolio_loss_halted = False
+        self.portfolio_loss_halted = False  # Current halt state
+        self.portfolio_halt_latched = False  # Hard latch — once set, stays until UTC day reset
 
         # Event-risk calendar kill switch
         self.event_cal_blackout: Optional[Dict] = None  # Blocked state from is_near_macro_event()
@@ -299,27 +300,33 @@ class TradingLoop:
                 # OI Velocity snapshot (once per 60 cycles ≈ hourly)
                 self._update_oi_snapshots()
 
-                # Portfolio-level daily loss hard halt — stops ALL sleeves
+                # Portfolio-level daily loss hard halt — stops ALL sleeves (hard latch)
+                # Once triggered, stays blocked until the next UTC day reset.
+                # Check if we've crossed into a new UTC day (daily PnL reset cycle)
+                today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+                if today != self.last_daily_reset:
+                    # New UTC day — clear both halt and latch
+                    if self.portfolio_halt_latched:
+                        print(f"📅 New UTC day ({today}) — portfolio halt latch cleared")
+                    self.portfolio_loss_halted = False
+                    self.portfolio_halt_latched = False
+
+                # Trigger halt if daily loss exceeds threshold
                 if (
                     self.daily_pnl_pct is not None
                     and self.daily_pnl_pct <= -abs(self.portfolio_hard_halt_pct)
                 ):
-                    if not self.portfolio_loss_halted:
+                    if not self.portfolio_halt_latched:
                         print(
                             f"⚠️ PORTFOLIO HALT: daily PnL {self.daily_pnl_pct:+.2f}% "
-                            f"<= -{abs(self.portfolio_hard_halt_pct):.1f}% — all entries blocked"
+                            f"<= -{abs(self.portfolio_hard_halt_pct):.1f}% — entries blocked for rest of UTC day"
                         )
                     self.portfolio_loss_halted = True
-                elif self.daily_pnl_pct is not None and self.daily_pnl_pct > -abs(
-                    self.portfolio_hard_halt_pct
-                ):
-                    # Reset halt when daily PnL recovers above threshold
-                    if self.portfolio_loss_halted:
-                        print(
-                            f"✅ PORTFOLIO HALT RESET: daily PnL {self.daily_pnl_pct:+.2f}% "
-                            f"> -{abs(self.portfolio_hard_halt_pct):.1f}%"
-                        )
-                    self.portfolio_loss_halted = False
+                    self.portfolio_halt_latched = True
+
+                # If latched but PnL drifted above threshold, keep halted until day reset
+                if self.portfolio_halt_latched and not self.portfolio_loss_halted:
+                    self.portfolio_loss_halted = True
 
                 # Event-risk calendar check — flatten & block before macro events
                 cal_check = self._check_event_calendar()

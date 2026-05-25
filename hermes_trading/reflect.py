@@ -92,6 +92,38 @@ def save_strategy_version(state_dir: Path, asset_key: str, strategy: dict):
 
 
 def write_strategy(state_dir: Path, asset_key: str, strategy: dict):
+    """Write strategy to disk with hard absolute bounds enforced at write time.
+    
+    These bounds are the last-mile safety layer — they clamp any values that
+    may have been set by LLM hermes mode, fallback reflect, or manual edits
+    to prevent extreme/unreasonable parameters from reaching the trading loop.
+    """
+    # ── Exit param hard bounds (non-bypassable last-mile enforcement) ──
+    bounds = {
+        "scale_out_min_R": (0.1, 2.0),
+        "tp2_target_R": (0.5, 5.0),
+        "tp2_slice": (0.1, 0.9),
+        "chandelier_mult_alts": (1.0, 10.0),
+        "chandelier_mult_major": (1.0, 6.0),
+        "stop_loss_pct": (0.3, 10.0),
+    }
+    for key, (lo, hi) in bounds.items():
+        if key in strategy:
+            strategy[key] = round(max(lo, min(hi, strategy[key])), 4)
+    
+    # Sub-dict bounds (btc_gate, entry thresholds, etc.)
+    btc_gate = strategy.get("btc_gate", {})
+    if "min_btc_1h_rsi" in btc_gate:
+        btc_gate["min_btc_1h_rsi"] = max(5, min(60, btc_gate["min_btc_1h_rsi"]))
+    
+    entry = strategy.get("entry", {})
+    if "threshold" in entry:
+        entry["threshold"] = max(5, min(50, entry["threshold"]))
+    
+    fng_gate = strategy.get("fng_gate", {})
+    if "min_value" in fng_gate:
+        fng_gate["min_value"] = max(1, min(50, fng_gate["min_value"]))
+    
     strat_path = state_dir / asset_key / "strategy.yaml"
     with open(strat_path, "w") as f:
         yaml.dump(strategy, f, default_flow_style=False)

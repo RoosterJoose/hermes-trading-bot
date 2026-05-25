@@ -122,4 +122,6 @@ dashboard_helpers.py     — State aggregation for live dashboard
 3. **12-24h correlation lookback** — Faster than 60-period spec, better for crypto regime shifts
 4. **Trend sleeve chandelier-only** — Preserves right-tail returns, no TP1/TP2 applied
 5. **`runner_high` anchor reset** — Chandelier resets after TP2 to prevent spike-choking the runner
-6. **Paper → Live path** — Requires limit/maker order execution layer for tight 0.3R targets
+6. **Portfolio halt hard latch** — Once -4% breached, blocks entries until UTC day reset (no mid-day whipsaw)
+7. **`write_strategy` hard bounds** — Last-mile clamping: `scale_out_min_R` [0.1, 2.0], `tp2_target_R` [0.5, 5.0], `stop_loss_pct` [0.3, 10.0], chandelier multipliers [1.0, 10.0]/[1.0, 6.0], plus all sub-dict params bounded
+8. **Paper → Live path** — Requires limit/maker order execution layer for tight 0.3R targets
