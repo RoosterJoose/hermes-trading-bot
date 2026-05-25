@@ -2126,18 +2126,18 @@ class TradingLoop:
                     )
 
         # Bid-ask spread proxy: avg (high-low)/close over last 5 candles
-        # ≤ 0.08% = tight execution spreads for 1m MR
+        # ≤ 0.15% = tight execution spreads (raised from 0.08% for volatile alt entries)
         if candles is not None and len(candles) >= 5:
             spreads = []
             for c in candles[-5:]:
                 if c.get("close", 0) > 0:
                     spread_pct = (c["high"] - c["low"]) / c["close"]
                     spreads.append(spread_pct)
-            if spreads and sum(spreads) / len(spreads) > 0.0008:
+            if spreads and sum(spreads) / len(spreads) > 0.0015:
                 avg_spread = sum(spreads) / len(spreads) * 100
                 return (
                     False,
-                    f"KILL: {asset_key.split('_')[0]} spread {avg_spread:.4f}% > 0.08%",
+                    f"KILL: {asset_key.split('_')[0]} spread {avg_spread:.4f}% > 0.15%",
                 )
 
         # BTC correlation sector cap: max 2 high-β positions concurrently

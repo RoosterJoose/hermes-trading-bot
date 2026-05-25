@@ -65,11 +65,20 @@ def read_pid(name: str) -> int | None:
 
 
 def is_alive(pid: int | None) -> bool:
-    """Check if a process is alive using kill(0). Returns False on any error."""
+    """Check if a process is alive and not a zombie (Z state)."""
     if pid is None:
         return False
     try:
         os.kill(pid, 0)
+        # Process exists — check it's not a zombie
+        try:
+            stat_path = f"/proc/{pid}/stat"
+            if os.path.exists(stat_path):
+                stat = open(stat_path).read().split()
+                if len(stat) > 2 and stat[2] == 'Z':
+                    return False  # Zombie — not usable
+        except (OSError, IOError, IndexError):
+            pass
         return True
     except (ProcessLookupError, PermissionError, OSError):
         return False
