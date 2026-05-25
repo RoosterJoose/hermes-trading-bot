@@ -145,7 +145,7 @@ def bot_healthy() -> tuple[bool, str]:
 def api_responding() -> bool:
     import urllib.request, urllib.error
     try:
-        r = urllib.request.Request("http://localhost:8502/api/dashboard", method="HEAD")
+        r = urllib.request.Request("http://localhost:8502/api/dashboard", method="GET")
         with urllib.request.urlopen(r, timeout=5) as resp:
             return resp.status == 200
     except Exception:
