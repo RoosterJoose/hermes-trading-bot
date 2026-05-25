@@ -1212,9 +1212,16 @@ class TradingLoop:
 
             else:
                 # ── 8c. Update chandelier high-water mark ──
-                existing["chandelier_high"] = max(
-                    existing.get("chandelier_high", entry_price), current_price
-                )
+                # After TP2, track runner_high separately so the Chandelier
+                # anchor resets — prevents the TP2 spike from choking the runner.
+                if existing.get("tp2_hit", False):
+                    existing["runner_high"] = max(
+                        existing.get("runner_high", current_price), current_price
+                    )
+                else:
+                    existing["chandelier_high"] = max(
+                        existing.get("chandelier_high", entry_price), current_price
+                    )
 
                 # ── 8d. Scale-out TP1 (50% at 20 EMA reversion, min profit required) ──
                 if not existing.get("scaled_out", False) and len(candles) >= 22:
@@ -1251,8 +1258,16 @@ class TradingLoop:
                     ch_mult = strategy.get("chandelier_mult_alts", 4.0)
                     if "BTC" in asset_key or "ETH" in asset_key:
                         ch_mult = strategy.get("chandelier_mult_major", 2.5)
+                    # After TP2, use runner_high (resets from spike) instead of
+                    # the absolute chandelier_high from entry, so the runner
+                    # has breathing room after the TP2 take-profit.
+                    trail_high = (
+                        existing.get("runner_high")
+                        if existing.get("tp2_hit", False) and existing.get("runner_high")
+                        else existing["chandelier_high"]
+                    )
                     chandelier = self._calc_chandelier_exit(
-                        candles, existing["chandelier_high"], ch_mult
+                        candles, trail_high, ch_mult
                     )
                     if chandelier is not None and current_price < chandelier:
                         ctx = self._current_market_context()
@@ -1268,7 +1283,7 @@ class TradingLoop:
                             ctx,
                         )
                         print(
-                            f"  {asset_key}: 🔚 CHANDELIER EXIT @ {current_price:.4f} (trailed from {existing['chandelier_high']:.4f})"
+                            f"  {asset_key}: 🔚 CHANDELIER EXIT @ {current_price:.4f} (trailed from {existing.get('runner_high', existing['chandelier_high']):.4f})"
                         )
 
                 # ── 8f. TP2 — take another slice at target R ──
@@ -1622,6 +1637,7 @@ class TradingLoop:
             "confidence_score": confidence_score,
             "scaled_out": False,  # TP1 (50% at EMA reversion) taken?
             "tp2_hit": False,  # TP2 (25% at target R) taken?
+            "runner_high": None,  # highest price since TP2 (resets chandelier anchor)
             "chandelier_high": price,  # highest price since entry (for trailing)
         }
         self.positions[asset_key] = position
@@ -1711,6 +1727,7 @@ class TradingLoop:
                 position["scaled_out"] = True
             elif reason == "tp2":
                 position["tp2_hit"] = True
+                position["runner_high"] = price  # Reset chandelier anchor from TP2 spike
         else:
             self.positions[asset_key] = None
 
