@@ -33,3 +33,4 @@ data/
 # Auto-generated
 models_dev_cache.json
 daily_readiness_report_*.md
+backtest_state/
