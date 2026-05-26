@@ -376,6 +376,19 @@ def summarize(state_dir: Path, asset_key: str, goal: dict, trades: list) -> str:
         fng = current.get("fng_gate", {})
         lines.append(f"   FnG Gate: min value {fng.get('min_value', 10)}")
 
+        # ── Stop-Loss ATR Suitability (NB recommendation) ──
+        sl_pct = current.get("stop_loss_pct", 2.0)
+        atr_pct = current.get("atr_sl_floor_pct", 1.0)
+        # Rough ATR check: compare stop to ATR
+        atr_multiple = sl_pct / atr_pct if atr_pct > 0 else 0
+        lines.append(f"\n🛑 Stop-Loss ATR Assessment:")
+        lines.append(f"   Stop: {sl_pct}% | ATR floor: {atr_pct}% | Ratio: {atr_multiple:.1f}x ATR")
+        if atr_multiple < 1.5:
+            lines.append(f"   ⚠️  Stop ({atr_multiple:.1f}x ATR) may be too tight for MR per NB guidance (1.5-3.0x ATR recommended)")
+            lines.append(f"   → Consider widening stop_loss_pct or lowering atr_sl_mult")
+        elif atr_multiple > 4.0:
+            lines.append(f"   ⚠️  Stop ({atr_multiple:.1f}x ATR) may be too wide — consider tightening")
+
     # Trade statistics
     lines.append(f"\n📊 Trade Statistics ({len(trades)} trades):")
     if trades:
@@ -477,11 +490,31 @@ def summarize(state_dir: Path, asset_key: str, goal: dict, trades: list) -> str:
             lines.append(f"   Avg hold: {avg_hrs_all:.1f}h | Winners: {avg_win_hrs:.1f}h | Losers: {avg_loss_hrs:.1f}h")
             lines.append(f"   Duration-PnL correlation: r={dur_r:.3f}")
             if dur_r < -0.3:
-                lines.append(f"   ⚠️  Negative correlation: longer holds = worse outcomes — tighten time_exit_cycles")
+                lines.append(f"   📋 NB Diagnosis: Short holds profit, long holds lose → Standard MR profile")
+                lines.append(f"   → Tighten time_exit_cycles to cut dead trades before they drift to stop")
             elif dur_r > 0.3:
-                lines.append(f"   ✅ Positive correlation: winners benefit from longer holds — consider widening time_exit_cycles")
+                lines.append(f"   📋 NB Diagnosis: Long holds profit more → Runner capture working correctly")
+                lines.append(f"   → Do NOT tighten time stop — would choke 1.5R+ winners")
+            else:
+                lines.append(f"   📋 Duration-PnL: No clear correlation — time exit may not be the limiting factor")
             if avg_win_hrs < avg_loss_hrs and avg_loss_hrs > 0:
                 lines.append(f"   💡 Losers held {avg_loss_hrs / max(avg_win_hrs, 0.1):.1f}x longer than winners — time stop could improve expectancy")
+
+        # ── Half-signal analysis (NB recommendation) ──
+        half_trades = [t for t in trades if t.get("signal") == "rsi_oversold_half"]
+        if half_trades:
+            half_pnls = [t.get("pnl_pct", 0) for t in half_trades]
+            half_wins = [p for p in half_pnls if p > 0]
+            half_losses = [p for p in half_pnls if p < 0]
+            half_wr = len(half_wins) / len(half_trades) * 100
+            half_total = sum(half_pnls)
+            half_net_negative = half_total < 0
+            lines.append(f"\n🔍 Half-Signal Analysis ({len(half_trades)} trades):")
+            lines.append(f"   Win Rate: {half_wr:.0f}% | Total PnL: {half_total:+.2f}% | Avg R: {sum(half_pnls)/len(half_pnls):+.2f}%")
+            if half_wr < 40 and half_net_negative:
+                lines.append(f"   ⚠️  Half-signal bleeding (WR={half_wr:.0f}%, PnL={half_total:+.2f}%)")
+                lines.append(f"   → NB recommends requiring volume spike (≥4x avg) or LL cascade as confluence for half entries")
+                lines.append(f"   → Consider disabling half-signal or tightening the decision threshold")
 
         # ── Regime-conditioned performance splits ──
         regimes = {}
@@ -512,6 +545,48 @@ def summarize(state_dir: Path, asset_key: str, goal: dict, trades: list) -> str:
                     lines.append(f"   💡 Best regime: {best_r[0]} ({sum(best_r[1]['pnls'])/len(best_r[1]['pnls']):+.2f}% avg) vs "
                                   f"Worst: {worst_r[0]} ({sum(worst_r[1]['pnls'])/len(worst_r[1]['pnls']):+.2f}% avg) — "
                                   f"optimize params for the regime that actually produced trades")
+
+        # ── ADX Regime-Conditioned Performance (NB recommendation) ──
+        if state_dir and asset_key:
+            setups_path = state_dir / asset_key / "setups_log.jsonl"
+            if setups_path.exists():
+                adx_trades = []  # trades with ADX data
+                try:
+                    with open(setups_path) as f:
+                        for line in f:
+                            line = line.strip()
+                            if not line:
+                                continue
+                            entry = json.loads(line)
+                            # Match trades by finding setups that led to entries near the trade's entry time
+                            # Simpler: just analyze setups_log entries that have adx in components
+                            comps = entry.get("confidence_components", {})
+                            adx_val = comps.get("adx")
+                            if adx_val is not None and entry.get("confidence_decision") in ("full", "half"):
+                                # Invert: adx_score = max(0.0, 1.0 - adx/30)
+                                # So adx ≈ (1 - adx_score) * 30
+                                raw_adx = (1 - adx_val) * 30 if adx_val > 0 else 0
+                                adx_trades.append({"adx": raw_adx, "score": entry.get("confidence_score", 0)})
+                except Exception:
+                    pass
+
+                if len(adx_trades) >= 5:
+                    bands = {"<20": [], "20-25": [], "25-30": [], ">30": []}
+                    for t in adx_trades:
+                        a = t["adx"]
+                        if a < 20: bands["<20"].append(t)
+                        elif a < 25: bands["20-25"].append(t)
+                        elif a < 30: bands["25-30"].append(t)
+                        else: bands[">30"].append(t)
+
+                    lines.append(f"\n📊 ADX Regime-Conditioned Setups ({len(adx_trades)} entries):")
+                    for band, entries in bands.items():
+                        if not entries:
+                            continue
+                        avg_score = sum(e["score"] for e in entries) / len(entries)
+                        lines.append(f"   ADX {band}: {len(entries)} setups | avg score {avg_score:.2f}")
+                        if band == ">30" and len(entries) >= 3:
+                            lines.append(f"   ⚠️  {len(entries)} setups entered with ADX > 30 — these should be blocked per NB recommendation")
 
         # Recent trades
         lines.append(f"\n📈 Recent Trades (last 5):")

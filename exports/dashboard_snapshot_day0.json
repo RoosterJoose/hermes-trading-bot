@@ -1,0 +1,1317 @@
+{
+  "export_time_utc": "2026-05-26T02:57:30Z",
+  "paper_start_date": "2026-05-25",
+  "day": 0,
+  "dashboard": {
+    "mode": "paper",
+    "paperBalance": 962.81,
+    "totalPnlPct": -3.72,
+    "grossPnlPct": -1.25,
+    "feesPct": 0.12,
+    "fundingPct": -0.0,
+    "profitFactor": 0.79,
+    "expectancy": -0.03,
+    "winRate": 34.0,
+    "totalTrades": 106,
+    "wins": 36,
+    "losses": 70,
+    "maxDrawdown": 5.1,
+    "currentDrawdown": 4.2,
+    "btcPrice": 76642.5,
+    "btcRsi": 33.38840023217392,
+    "fearGreedValue": 34,
+    "fearGreedLabel": "Fear",
+    "trustLabel": "HIGH",
+    "trustMultiplier": 1.0,
+    "openPositionsCount": 0,
+    "maxPositions": 5,
+    "portfolioHeat": 0,
+    "dailyPnl": 0.56,
+    "dailyWins": 5,
+    "dailyLosses": 2,
+    "consecutiveLosses": 0,
+    "killSwitchActive": false,
+    "dailyLossUsed": 0,
+    "dailyLossLimit": 3.0,
+    "correlationExp": "PASS",
+    "dataFreshness": "Healthy",
+    "btcVolRegime": "Normal",
+    "uptimePct": 84.4,
+    "paperDays": 1,
+    "requiredPaperDays": 30,
+    "closedTradesReadiness": 106,
+    "minTradeCount": 50,
+    "sharpeRatio": null,
+    "maxDrawdownPct": 0.0,
+    "maxDrawdownLimit": 19.77,
+    "uptimeHours": 0.0,
+    "minUptimeHours": 168,
+    "stopLossRatio": 0.104,
+    "stopLossLimit": 0.4,
+    "dataIntegrity": true,
+    "extremeLosses": 0,
+    "readinessScore": 62,
+    "isReady": false,
+    "blockers": [
+      "paper_days: 1/30",
+      "sharpe: insufficient daily data (< 5 days with trades)",
+      "uptime: 0h < 168h minimum"
+    ],
+    "stale": false,
+    "pausedAssets": {
+      "DOT": "kill_switch: KILL: DOT vol $1.",
+      "NEAR": "kill_switch: KILL: NEAR spread"
+    },
+    "tunnelUrl": "https://bracket-arbitration-examined-senators.trycloudflare.com",
+    "timestamp": "2026-05-26T02:57:30.241678+00:00",
+    "positions": [],
+    "equityCurve": {
+      "points": [
+        {
+          "date": "May 22",
+          "equity": 1000.01
+        },
+        {
+          "date": "May 22",
+          "equity": 988.59
+        },
+        {
+          "date": "May 22",
+          "equity": 977.16
+        },
+        {
+          "date": "May 22",
+          "equity": 965.44
+        },
+        {
+          "date": "May 24",
+          "equity": 965.87
+        },
+        {
+          "date": "May 24",
+          "equity": 965.41
+        },
+        {
+          "date": "May 24",
+          "equity": 965.41
+        },
+        {
+          "date": "May 24",
+          "equity": 965.41
+        },
+        {
+          "date": "May 24",
+          "equity": 965.41
+        },
+        {
+          "date": "May 24",
+          "equity": 965.41
+        },
+        {
+          "date": "May 24",
+          "equity": 964.33
+        },
+        {
+          "date": "May 24",
+          "equity": 964.33
+        },
+        {
+          "date": "May 24",
+          "equity": 967.57
+        },
+        {
+          "date": "May 24",
+          "equity": 967.57
+        },
+        {
+          "date": "May 24",
+          "equity": 957.89
+        },
+        {
+          "date": "May 24",
+          "equity": 957.0
+        },
+        {
+          "date": "May 24",
+          "equity": 957.0
+        },
+        {
+          "date": "May 24",
+          "equity": 955.22
+        },
+        {
+          "date": "May 24",
+          "equity": 955.22
+        },
+        {
+          "date": "May 24",
+          "equity": 956.66
+        },
+        {
+          "date": "May 24",
+          "equity": 958.03
+        },
+        {
+          "date": "May 24",
+          "equity": 956.67
+        },
+        {
+          "date": "May 24",
+          "equity": 956.67
+        },
+        {
+          "date": "May 24",
+          "equity": 956.67
+        },
+        {
+          "date": "May 24",
+          "equity": 956.65
+        },
+        {
+          "date": "May 24",
+          "equity": 956.65
+        },
+        {
+          "date": "May 24",
+          "equity": 959.04
+        },
+        {
+          "date": "May 24",
+          "equity": 959.46
+        },
+        {
+          "date": "May 24",
+          "equity": 958.43
+        },
+        {
+          "date": "May 24",
+          "equity": 958.43
+        },
+        {
+          "date": "May 24",
+          "equity": 961.02
+        },
+        {
+          "date": "May 24",
+          "equity": 963.61
+        },
+        {
+          "date": "May 24",
+          "equity": 963.61
+        },
+        {
+          "date": "May 24",
+          "equity": 982.3
+        },
+        {
+          "date": "May 24",
+          "equity": 984.67
+        },
+        {
+          "date": "May 24",
+          "equity": 974.68
+        },
+        {
+          "date": "May 24",
+          "equity": 974.68
+        },
+        {
+          "date": "May 24",
+          "equity": 973.75
+        },
+        {
+          "date": "May 24",
+          "equity": 988.02
+        },
+        {
+          "date": "May 24",
+          "equity": 985.45
+        },
+        {
+          "date": "May 24",
+          "equity": 982.88
+        },
+        {
+          "date": "May 24",
+          "equity": 994.63
+        },
+        {
+          "date": "May 24",
+          "equity": 994.63
+        },
+        {
+          "date": "May 24",
+          "equity": 994.65
+        },
+        {
+          "date": "May 24",
+          "equity": 984.31
+        },
+        {
+          "date": "May 24",
+          "equity": 984.31
+        },
+        {
+          "date": "May 24",
+          "equity": 985.19
+        },
+        {
+          "date": "May 24",
+          "equity": 983.79
+        },
+        {
+          "date": "May 24",
+          "equity": 982.39
+        },
+        {
+          "date": "May 24",
+          "equity": 982.39
+        },
+        {
+          "date": "May 24",
+          "equity": 980.93
+        },
+        {
+          "date": "May 24",
+          "equity": 980.98
+        },
+        {
+          "date": "May 24",
+          "equity": 980.86
+        },
+        {
+          "date": "May 24",
+          "equity": 980.86
+        },
+        {
+          "date": "May 24",
+          "equity": 978.94
+        },
+        {
+          "date": "May 24",
+          "equity": 978.94
+        },
+        {
+          "date": "May 24",
+          "equity": 979.34
+        },
+        {
+          "date": "May 24",
+          "equity": 977.49
+        },
+        {
+          "date": "May 24",
+          "equity": 975.63
+        },
+        {
+          "date": "May 24",
+          "equity": 975.72
+        },
+        {
+          "date": "May 24",
+          "equity": 975.81
+        },
+        {
+          "date": "May 24",
+          "equity": 975.81
+        },
+        {
+          "date": "May 24",
+          "equity": 978.75
+        },
+        {
+          "date": "May 24",
+          "equity": 978.75
+        },
+        {
+          "date": "May 24",
+          "equity": 978.02
+        },
+        {
+          "date": "May 24",
+          "equity": 978.02
+        },
+        {
+          "date": "May 24",
+          "equity": 979.19
+        },
+        {
+          "date": "May 24",
+          "equity": 968.07
+        },
+        {
+          "date": "May 24",
+          "equity": 967.46
+        },
+        {
+          "date": "May 24",
+          "equity": 972.23
+        },
+        {
+          "date": "May 24",
+          "equity": 972.69
+        },
+        {
+          "date": "May 24",
+          "equity": 973.15
+        },
+        {
+          "date": "May 24",
+          "equity": 987.65
+        },
+        {
+          "date": "May 24",
+          "equity": 1002.38
+        },
+        {
+          "date": "May 24",
+          "equity": 1004.93
+        },
+        {
+          "date": "May 24",
+          "equity": 1003.82
+        },
+        {
+          "date": "May 24",
+          "equity": 1002.72
+        },
+        {
+          "date": "May 24",
+          "equity": 999.58
+        },
+        {
+          "date": "May 24",
+          "equity": 996.45
+        },
+        {
+          "date": "May 24",
+          "equity": 997.53
+        },
+        {
+          "date": "May 24",
+          "equity": 997.53
+        },
+        {
+          "date": "May 24",
+          "equity": 1001.9
+        },
+        {
+          "date": "May 24",
+          "equity": 991.61
+        },
+        {
+          "date": "May 24",
+          "equity": 981.6
+        },
+        {
+          "date": "May 24",
+          "equity": 981.6
+        },
+        {
+          "date": "May 24",
+          "equity": 981.6
+        },
+        {
+          "date": "May 24",
+          "equity": 981.6
+        },
+        {
+          "date": "May 24",
+          "equity": 978.27
+        },
+        {
+          "date": "May 24",
+          "equity": 974.99
+        },
+        {
+          "date": "May 24",
+          "equity": 979.44
+        },
+        {
+          "date": "May 24",
+          "equity": 977.81
+        },
+        {
+          "date": "May 24",
+          "equity": 973.67
+        },
+        {
+          "date": "May 24",
+          "equity": 971.16
+        },
+        {
+          "date": "May 24",
+          "equity": 968.65
+        },
+        {
+          "date": "May 24",
+          "equity": 969.44
+        },
+        {
+          "date": "May 24",
+          "equity": 972.88
+        },
+        {
+          "date": "May 24",
+          "equity": 967.69
+        },
+        {
+          "date": "May 24",
+          "equity": 962.53
+        },
+        {
+          "date": "May 24",
+          "equity": 962.37
+        },
+        {
+          "date": "May 25",
+          "equity": 957.51
+        },
+        {
+          "date": "May 26",
+          "equity": 953.35
+        },
+        {
+          "date": "May 26",
+          "equity": 958.54
+        },
+        {
+          "date": "May 26",
+          "equity": 961.35
+        },
+        {
+          "date": "May 26",
+          "equity": 961.72
+        },
+        {
+          "date": "May 26",
+          "equity": 964.75
+        },
+        {
+          "date": "May 26",
+          "equity": 962.48
+        },
+        {
+          "date": "May 26",
+          "equity": 962.82
+        }
+      ],
+      "drawdownPoints": [
+        {
+          "date": "May 22",
+          "value": 0.0
+        },
+        {
+          "date": "May 22",
+          "value": -1.14
+        },
+        {
+          "date": "May 22",
+          "value": -2.29
+        },
+        {
+          "date": "May 22",
+          "value": -3.46
+        },
+        {
+          "date": "May 24",
+          "value": -3.41
+        },
+        {
+          "date": "May 24",
+          "value": -3.46
+        },
+        {
+          "date": "May 24",
+          "value": -3.46
+        },
+        {
+          "date": "May 24",
+          "value": -3.46
+        },
+        {
+          "date": "May 24",
+          "value": -3.46
+        },
+        {
+          "date": "May 24",
+          "value": -3.46
+        },
+        {
+          "date": "May 24",
+          "value": -3.57
+        },
+        {
+          "date": "May 24",
+          "value": -3.57
+        },
+        {
+          "date": "May 24",
+          "value": -3.24
+        },
+        {
+          "date": "May 24",
+          "value": -3.24
+        },
+        {
+          "date": "May 24",
+          "value": -4.21
+        },
+        {
+          "date": "May 24",
+          "value": -4.3
+        },
+        {
+          "date": "May 24",
+          "value": -4.3
+        },
+        {
+          "date": "May 24",
+          "value": -4.48
+        },
+        {
+          "date": "May 24",
+          "value": -4.48
+        },
+        {
+          "date": "May 24",
+          "value": -4.33
+        },
+        {
+          "date": "May 24",
+          "value": -4.2
+        },
+        {
+          "date": "May 24",
+          "value": -4.33
+        },
+        {
+          "date": "May 24",
+          "value": -4.33
+        },
+        {
+          "date": "May 24",
+          "value": -4.33
+        },
+        {
+          "date": "May 24",
+          "value": -4.34
+        },
+        {
+          "date": "May 24",
+          "value": -4.34
+        },
+        {
+          "date": "May 24",
+          "value": -4.1
+        },
+        {
+          "date": "May 24",
+          "value": -4.05
+        },
+        {
+          "date": "May 24",
+          "value": -4.16
+        },
+        {
+          "date": "May 24",
+          "value": -4.16
+        },
+        {
+          "date": "May 24",
+          "value": -3.9
+        },
+        {
+          "date": "May 24",
+          "value": -3.64
+        },
+        {
+          "date": "May 24",
+          "value": -3.64
+        },
+        {
+          "date": "May 24",
+          "value": -1.77
+        },
+        {
+          "date": "May 24",
+          "value": -1.53
+        },
+        {
+          "date": "May 24",
+          "value": -2.53
+        },
+        {
+          "date": "May 24",
+          "value": -2.53
+        },
+        {
+          "date": "May 24",
+          "value": -2.63
+        },
+        {
+          "date": "May 24",
+          "value": -1.2
+        },
+        {
+          "date": "May 24",
+          "value": -1.46
+        },
+        {
+          "date": "May 24",
+          "value": -1.71
+        },
+        {
+          "date": "May 24",
+          "value": -0.54
+        },
+        {
+          "date": "May 24",
+          "value": -0.54
+        },
+        {
+          "date": "May 24",
+          "value": -0.54
+        },
+        {
+          "date": "May 24",
+          "value": -1.57
+        },
+        {
+          "date": "May 24",
+          "value": -1.57
+        },
+        {
+          "date": "May 24",
+          "value": -1.48
+        },
+        {
+          "date": "May 24",
+          "value": -1.62
+        },
+        {
+          "date": "May 24",
+          "value": -1.76
+        },
+        {
+          "date": "May 24",
+          "value": -1.76
+        },
+        {
+          "date": "May 24",
+          "value": -1.91
+        },
+        {
+          "date": "May 24",
+          "value": -1.9
+        },
+        {
+          "date": "May 24",
+          "value": -1.92
+        },
+        {
+          "date": "May 24",
+          "value": -1.92
+        },
+        {
+          "date": "May 24",
+          "value": -2.11
+        },
+        {
+          "date": "May 24",
+          "value": -2.11
+        },
+        {
+          "date": "May 24",
+          "value": -2.07
+        },
+        {
+          "date": "May 24",
+          "value": -2.25
+        },
+        {
+          "date": "May 24",
+          "value": -2.44
+        },
+        {
+          "date": "May 24",
+          "value": -2.43
+        },
+        {
+          "date": "May 24",
+          "value": -2.42
+        },
+        {
+          "date": "May 24",
+          "value": -2.42
+        },
+        {
+          "date": "May 24",
+          "value": -2.13
+        },
+        {
+          "date": "May 24",
+          "value": -2.13
+        },
+        {
+          "date": "May 24",
+          "value": -2.2
+        },
+        {
+          "date": "May 24",
+          "value": -2.2
+        },
+        {
+          "date": "May 24",
+          "value": -2.08
+        },
+        {
+          "date": "May 24",
+          "value": -3.19
+        },
+        {
+          "date": "May 24",
+          "value": -3.26
+        },
+        {
+          "date": "May 24",
+          "value": -2.78
+        },
+        {
+          "date": "May 24",
+          "value": -2.73
+        },
+        {
+          "date": "May 24",
+          "value": -2.69
+        },
+        {
+          "date": "May 24",
+          "value": -1.24
+        },
+        {
+          "date": "May 24",
+          "value": 0.0
+        },
+        {
+          "date": "May 24",
+          "value": 0.0
+        },
+        {
+          "date": "May 24",
+          "value": -0.11
+        },
+        {
+          "date": "May 24",
+          "value": -0.22
+        },
+        {
+          "date": "May 24",
+          "value": -0.53
+        },
+        {
+          "date": "May 24",
+          "value": -0.84
+        },
+        {
+          "date": "May 24",
+          "value": -0.74
+        },
+        {
+          "date": "May 24",
+          "value": -0.74
+        },
+        {
+          "date": "May 24",
+          "value": -0.3
+        },
+        {
+          "date": "May 24",
+          "value": -1.33
+        },
+        {
+          "date": "May 24",
+          "value": -2.32
+        },
+        {
+          "date": "May 24",
+          "value": -2.32
+        },
+        {
+          "date": "May 24",
+          "value": -2.32
+        },
+        {
+          "date": "May 24",
+          "value": -2.32
+        },
+        {
+          "date": "May 24",
+          "value": -2.65
+        },
+        {
+          "date": "May 24",
+          "value": -2.98
+        },
+        {
+          "date": "May 24",
+          "value": -2.54
+        },
+        {
+          "date": "May 24",
+          "value": -2.7
+        },
+        {
+          "date": "May 24",
+          "value": -3.11
+        },
+        {
+          "date": "May 24",
+          "value": -3.36
+        },
+        {
+          "date": "May 24",
+          "value": -3.61
+        },
+        {
+          "date": "May 24",
+          "value": -3.53
+        },
+        {
+          "date": "May 24",
+          "value": -3.19
+        },
+        {
+          "date": "May 24",
+          "value": -3.71
+        },
+        {
+          "date": "May 24",
+          "value": -4.22
+        },
+        {
+          "date": "May 24",
+          "value": -4.24
+        },
+        {
+          "date": "May 25",
+          "value": -4.72
+        },
+        {
+          "date": "May 26",
+          "value": -5.13
+        },
+        {
+          "date": "May 26",
+          "value": -4.62
+        },
+        {
+          "date": "May 26",
+          "value": -4.34
+        },
+        {
+          "date": "May 26",
+          "value": -4.3
+        },
+        {
+          "date": "May 26",
+          "value": -4.0
+        },
+        {
+          "date": "May 26",
+          "value": -4.22
+        },
+        {
+          "date": "May 26",
+          "value": -4.19
+        }
+      ]
+    },
+    "activityEvents": [
+      {
+        "timestamp": "2026-05-26T02:56:34.664769+00:00",
+        "type": "SYSTEM",
+        "asset": "",
+        "message": "Heartbeat: mode=paper, balance=$962.81"
+      },
+      {
+        "timestamp": "2026-05-26T02:56:34.640498+00:00",
+        "type": "RISK_BLOCK",
+        "asset": "DOT",
+        "message": "kill_switch: KILL: DOT vol $1.0M < $1M"
+      },
+      {
+        "timestamp": "2026-05-26T02:56:34.275481+00:00",
+        "type": "SIGNAL",
+        "asset": "LINK",
+        "message": "low_confidence:0.447"
+      },
+      {
+        "timestamp": "2026-05-26T02:56:33.874652+00:00",
+        "type": "SIGNAL",
+        "asset": "AVAX",
+        "message": "low_confidence:0.392"
+      },
+      {
+        "timestamp": "2026-05-26T02:56:33.504560+00:00",
+        "type": "SIGNAL",
+        "asset": "ADA",
+        "message": "low_confidence:0.455"
+      },
+      {
+        "timestamp": "2026-05-26T02:56:33.137910+00:00",
+        "type": "SIGNAL",
+        "asset": "NEAR",
+        "message": "low_confidence:0.400"
+      },
+      {
+        "timestamp": "2026-05-26T02:56:32.825076+00:00",
+        "type": "SIGNAL",
+        "asset": "DOGE",
+        "message": "low_confidence:0.437"
+      },
+      {
+        "timestamp": "2026-05-26T02:56:32.421460+00:00",
+        "type": "SIGNAL",
+        "asset": "XRP",
+        "message": "low_confidence:0.437"
+      },
+      {
+        "timestamp": "2026-05-26T02:56:32.026778+00:00",
+        "type": "SIGNAL",
+        "asset": "SOL",
+        "message": "low_confidence:0.438"
+      },
+      {
+        "timestamp": "2026-05-26T02:56:31.625430+00:00",
+        "type": "SIGNAL",
+        "asset": "BNB",
+        "message": "low_confidence:0.452"
+      },
+      {
+        "timestamp": "2026-05-26T02:56:31.227728+00:00",
+        "type": "SIGNAL",
+        "asset": "ETH",
+        "message": "low_confidence:0.443"
+      },
+      {
+        "timestamp": "2026-05-26T02:56:30.853633+00:00",
+        "type": "SIGNAL",
+        "asset": "BTC",
+        "message": "low_confidence:0.436"
+      },
+      {
+        "timestamp": "2026-05-26T02:55:28.654781+00:00",
+        "type": "RISK_BLOCK",
+        "asset": "DOT",
+        "message": "kill_switch: KILL: DOT vol $1.0M < $1M"
+      },
+      {
+        "timestamp": "2026-05-26T02:55:28.293495+00:00",
+        "type": "SIGNAL",
+        "asset": "LINK",
+        "message": "low_confidence:0.447"
+      },
+      {
+        "timestamp": "2026-05-26T02:55:27.889102+00:00",
+        "type": "SIGNAL",
+        "asset": "AVAX",
+        "message": "low_confidence:0.394"
+      },
+      {
+        "timestamp": "2026-05-26T02:55:27.520784+00:00",
+        "type": "SIGNAL",
+        "asset": "ADA",
+        "message": "low_confidence:0.454"
+      },
+      {
+        "timestamp": "2026-05-26T02:55:27.157318+00:00",
+        "type": "SIGNAL",
+        "asset": "NEAR",
+        "message": "low_confidence:0.263"
+      },
+      {
+        "timestamp": "2026-05-26T02:55:26.830997+00:00",
+        "type": "SIGNAL",
+        "asset": "DOGE",
+        "message": "low_confidence:0.439"
+      },
+      {
+        "timestamp": "2026-05-26T02:55:26.388704+00:00",
+        "type": "SIGNAL",
+        "asset": "XRP",
+        "message": "low_confidence:0.438"
+      },
+      {
+        "timestamp": "2026-05-26T02:55:25.999000+00:00",
+        "type": "SIGNAL",
+        "asset": "SOL",
+        "message": "low_confidence:0.437"
+      },
+      {
+        "timestamp": "2026-05-26T02:55:25.591728+00:00",
+        "type": "SIGNAL",
+        "asset": "BNB",
+        "message": "low_confidence:0.449"
+      },
+      {
+        "timestamp": "2026-05-26T02:55:25.194054+00:00",
+        "type": "SIGNAL",
+        "asset": "ETH",
+        "message": "low_confidence:0.442"
+      },
+      {
+        "timestamp": "2026-05-26T02:55:24.828758+00:00",
+        "type": "SIGNAL",
+        "asset": "BTC",
+        "message": "low_confidence:0.435"
+      },
+      {
+        "timestamp": "2026-05-26T02:54:22.461956+00:00",
+        "type": "RISK_BLOCK",
+        "asset": "DOT",
+        "message": "kill_switch: KILL: DOT vol $1.0M < $1M"
+      },
+      {
+        "timestamp": "2026-05-26T02:54:22.100062+00:00",
+        "type": "SIGNAL",
+        "asset": "LINK",
+        "message": "low_confidence:0.447"
+      }
+    ],
+    "leaderboard": [
+      {
+        "asset": "ADA",
+        "trades": 5,
+        "netPnl": "-0.99%",
+        "winRate": "60.0%",
+        "pf": 0.54,
+        "status": "STANDBY"
+      },
+      {
+        "asset": "AVAX",
+        "trades": 11,
+        "netPnl": "+0.19%",
+        "winRate": "36.4%",
+        "pf": 1.27,
+        "status": "STANDBY"
+      },
+      {
+        "asset": "BNB",
+        "trades": 16,
+        "netPnl": "+0.85%",
+        "winRate": "50.0%",
+        "pf": 1.98,
+        "status": "STANDBY"
+      },
+      {
+        "asset": "BTC",
+        "trades": 1,
+        "netPnl": "-1.00%",
+        "winRate": "0.0%",
+        "pf": 0.0,
+        "status": "STANDBY"
+      },
+      {
+        "asset": "DOGE",
+        "trades": 11,
+        "netPnl": "+2.01%",
+        "winRate": "45.5%",
+        "pf": 2.56,
+        "status": "STANDBY"
+      },
+      {
+        "asset": "DOT",
+        "trades": 9,
+        "netPnl": "+1.91%",
+        "winRate": "44.4%",
+        "pf": 2.51,
+        "status": "STANDBY"
+      },
+      {
+        "asset": "ETH",
+        "trades": 8,
+        "netPnl": "+1.25%",
+        "winRate": "12.5%",
+        "pf": 2.83,
+        "status": "STANDBY"
+      },
+      {
+        "asset": "LINK",
+        "trades": 4,
+        "netPnl": "-1.99%",
+        "winRate": "50.0%",
+        "pf": 0.04,
+        "status": "STANDBY"
+      },
+      {
+        "asset": "SOL",
+        "trades": 22,
+        "netPnl": "-4.46%",
+        "winRate": "22.7%",
+        "pf": 0.2,
+        "status": "STANDBY"
+      },
+      {
+        "asset": "XRP",
+        "trades": 19,
+        "netPnl": "-1.42%",
+        "winRate": "21.1%",
+        "pf": 0.04,
+        "status": "STANDBY"
+      }
+    ],
+    "gateAttribution": [
+      {
+        "gate": "Low Confidence",
+        "count": 996,
+        "pct": 59
+      },
+      {
+        "gate": "Cooldown",
+        "count": 345,
+        "pct": 20
+      },
+      {
+        "gate": "BTC Vol Surge",
+        "count": 338,
+        "pct": 20
+      },
+      {
+        "gate": "Z-Score Cooling",
+        "count": 13,
+        "pct": 1
+      }
+    ]
+  },
+  "advanced_stats": {
+    "total_trades": 106,
+    "signals": {
+      "rsi_oversold": {
+        "count": 73,
+        "wins": 24,
+        "losses": 49,
+        "win_rate": 32.9,
+        "avg_pnl_pct": 0.0078,
+        "total_pnl_pct": 0.5665
+      },
+      "rsi_oversold_half": {
+        "count": 33,
+        "wins": 12,
+        "losses": 21,
+        "win_rate": 36.4,
+        "avg_pnl_pct": -0.055,
+        "total_pnl_pct": -1.815
+      }
+    },
+    "exit_reasons": {
+      "chandelier_exit": {
+        "count": 42,
+        "wins": 20,
+        "losses": 22,
+        "win_rate": 47.6,
+        "avg_pnl_pct": 0.137
+      },
+      "scale_out_tp1": {
+        "count": 51,
+        "wins": 15,
+        "losses": 36,
+        "win_rate": 29.4,
+        "avg_pnl_pct": 0.0775
+      },
+      "stop_loss": {
+        "count": 11,
+        "wins": 0,
+        "losses": 11,
+        "win_rate": 0.0,
+        "avg_pnl_pct": -1.0809
+      },
+      "time_exit": {
+        "count": 1,
+        "wins": 0,
+        "losses": 1,
+        "win_rate": 0.0,
+        "avg_pnl_pct": -0.5802
+      },
+      "tp2": {
+        "count": 1,
+        "wins": 1,
+        "losses": 0,
+        "win_rate": 100.0,
+        "avg_pnl_pct": 1.5133
+      }
+    },
+    "assets": {
+      "ADA_USDT": {
+        "count": 5,
+        "wins": 3,
+        "losses": 2,
+        "win_rate": 60.0,
+        "avg_pnl_pct": 0.4815
+      },
+      "AVAX_USDT": {
+        "count": 11,
+        "wins": 4,
+        "losses": 7,
+        "win_rate": 36.4,
+        "avg_pnl_pct": 0.0102
+      },
+      "BNB_USDT": {
+        "count": 16,
+        "wins": 8,
+        "losses": 8,
+        "win_rate": 50.0,
+        "avg_pnl_pct": 0.0529
+      },
+      "BTC_USDT": {
+        "count": 1,
+        "wins": 0,
+        "losses": 1,
+        "win_rate": 0.0,
+        "avg_pnl_pct": -1.0006
+      },
+      "DOGE_USDT": {
+        "count": 11,
+        "wins": 5,
+        "losses": 6,
+        "win_rate": 45.5,
+        "avg_pnl_pct": 0.1828
+      },
+      "DOT_USDT": {
+        "count": 9,
+        "wins": 4,
+        "losses": 5,
+        "win_rate": 44.4,
+        "avg_pnl_pct": 0.2124
+      },
+      "ETH_USDT": {
+        "count": 8,
+        "wins": 1,
+        "losses": 7,
+        "win_rate": 12.5,
+        "avg_pnl_pct": 0.1568
+      },
+      "LINK_USDT": {
+        "count": 4,
+        "wins": 2,
+        "losses": 2,
+        "win_rate": 50.0,
+        "avg_pnl_pct": -0.3528
+      },
+      "SOL_USDT": {
+        "count": 22,
+        "wins": 5,
+        "losses": 17,
+        "win_rate": 22.7,
+        "avg_pnl_pct": -0.2435
+      },
+      "XRP_USDT": {
+        "count": 19,
+        "wins": 4,
+        "losses": 15,
+        "win_rate": 21.1,
+        "avg_pnl_pct": -0.1064
+      }
+    }
+  }
+}

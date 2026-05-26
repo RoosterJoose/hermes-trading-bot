@@ -1,7 +1,5 @@
 #!/usr/bin/env python3
-"""
-Hermes API Server — serves the Next.js frontend + live bot data endpoints.
-"""
+
 import json, os, sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -14,6 +12,7 @@ from dashboard_helpers import *
 FRONTEND_DIR = Path(__file__).parent / "hermes-ui" / "out"
 PORT = int(os.environ.get("PORT", 8502))
 
+
 class Handler(SimpleHTTPRequestHandler):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=str(FRONTEND_DIR), **kwargs)
@@ -24,13 +23,86 @@ class Handler(SimpleHTTPRequestHandler):
 
         if path == "/api/dashboard":
             self._send_json(self._build_dashboard())
+        elif path == "/api/trades":
+            self._send_json(self._build_trades_endpoint(parsed))
+        elif path == "/api/skip-analysis":
+            data = get_skip_analysis()
+            self._send_json(data.to_dict(orient="records") if not data.empty else [])
+        elif path == "/api/scores":
+            self._send_json(get_score_distribution())
+        elif path == "/api/leaderboard/detail":
+            data = get_leaderboard()
+            self._send_json(data.to_dict(orient="records") if not data.empty else [])
+        elif path == "/api/performance":
+            self._send_json(get_performance_metrics() or {})
+        elif path == "/api/readiness":
+            rd = get_readiness()
+            self._send_json(rd if "error" not in rd else {})
+        elif path == "/api/market":
+            self._send_json(get_market_context() or {})
+        elif path == "/api/activity":
+            all_events = get_activity_events(100)
+            self._send_json(all_events)
+        elif path == "/interactive":
+            self._serve_interactive()
+        elif path.startswith("/api/exports/"):
+            filename = path.split("/api/exports/")[-1]
+            exports_dir = Path(__file__).parent / "exports"
+            filepath = exports_dir / filename
+            if ".." in filename or "/" in filename:
+                self._send_json({"error": "invalid path"}, 400)
+            elif filepath.exists() and filepath.is_file():
+                self.send_response(200)
+                if filename.endswith(".csv"):
+                    self.send_header("Content-Type", "text/csv")
+                    self.send_header("Content-Disposition", 'attachment; filename="' + filename + '"')
+                elif filename.endswith(".json"):
+                    self.send_header("Content-Type", "application/json")
+                elif filename.endswith(".md"):
+                    self.send_header("Content-Type", "text/markdown")
+                else:
+                    self.send_header("Content-Type", "application/octet-stream")
+                self.send_header("Content-Length", str(filepath.stat().st_size))
+                self.end_headers()
+                with open(filepath, "rb") as f:
+                    self.wfile.write(f.read())
+            else:
+                self._send_json({"error": "file not found"}, 404)
         elif path.startswith("/api/"):
             self._send_json({"error": "endpoint not found"}, 404)
         else:
             super().do_GET()
 
-    def _build_dashboard(self) -> dict:
-        """Build the full dashboard JSON from live bot data."""
+    def _build_trades_endpoint(self, parsed):
+        from urllib.parse import parse_qs
+        params = parse_qs(parsed.query)
+        all_trades = get_all_trades()
+        af = params.get("asset", [None])[0]
+        if af:
+            af = af.upper().replace("_USDT", "").replace("-PERP", "")
+            all_trades = [t for t in all_trades if t.get("asset", "").upper().startswith(af)]
+        limit = params.get("limit", [None])[0]
+        if limit:
+            try:
+                all_trades = all_trades[:int(limit)]
+            except ValueError:
+                pass
+        return {"trades": all_trades, "count": len(all_trades)}
+
+    def _serve_interactive(self):
+        hp = Path("/opt/data/hermes-trading/interactive_dashboard.html")
+        if not hp.exists():
+            self._send_json({"error": "not found"}, 404)
+            return
+        c = hp.read_text(encoding="utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(c.encode())))
+        self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
+        self.end_headers()
+        self.wfile.write(c.encode())
+
+    def _build_dashboard(self):
         hb = get_heartbeat()
         hl = get_health()
         rd = get_readiness()
@@ -39,18 +111,14 @@ class Handler(SimpleHTTPRequestHandler):
         mk = get_market_context()
         lb = get_leaderboard()
         ga = get_gate_attribution()
-
         ok = "error" not in hb
         stale = hl.get("status") == "stale"
         dd_data = mk.get("max_drawdown", {})
         btc_ctx = hb.get("btc_context", {}) if ok else {}
         fg = hb.get("fear_greed", {}) if ok else {}
         tr = hb.get("trust_state", {}) if ok else {}
-
         balance = pm.get("balance", 1000) if pm else 1000
         total_pnl = pm.get("total_pnl_pct", 0) or 0
-
-        # Readiness score
         metrics_list = [
             rd.get("paper_days_met", False) if "error" not in rd else False,
             rd.get("min_trade_count_met", False) if "error" not in rd else False,
@@ -63,16 +131,12 @@ class Handler(SimpleHTTPRequestHandler):
         ]
         met = sum(1 for m in metrics_list if m)
         readiness_score = int(met / len(metrics_list) * 100) if metrics_list else 0
-
-        # Get blocked/paused assets from activity
         paused = {}
         for e in ev[:30]:
             if e.get("type") == "RISK_BLOCK" and e.get("asset"):
-                asset = e.get("asset", "")
-                if asset not in paused:
-                    paused[asset] = (e.get("message", "") or "")[:30]
-
-        # Get consecutive losses
+                a = e.get("asset", "")
+                if a not in paused:
+                    paused[a] = (e.get("message", "") or "")[:30]
         all_trades = get_all_trades()
         closed = [t for t in all_trades if t.get("exit_time")]
         closed_sorted = sorted(closed, key=lambda t: t.get("exit_time", ""), reverse=True)
@@ -82,12 +146,9 @@ class Handler(SimpleHTTPRequestHandler):
                 consec += 1
             else:
                 break
-
-        # Daily PnL
         today_str = datetime.now(timezone.utc).date().isoformat()
         today_t = [t for t in closed if t.get("exit_time", "").startswith(today_str)]
         daily_pnl = sum(get_pnl(t) for t in today_t)
-
         return {
             "mode": hb.get("mode", "paper") if ok else "paper",
             "paperBalance": round(balance, 2),
@@ -105,9 +166,9 @@ class Handler(SimpleHTTPRequestHandler):
             "currentDrawdown": round(abs(dd_data.get("current_dd_pct", 0) or 0), 1),
             "btcPrice": round(btc_ctx.get("btc_price", 0), 2),
             "btcRsi": btc_ctx.get("btc_1h_rsi"),
-            "fearGreedValue": fg.get("value", "—"),
+            "fearGreedValue": fg.get("value", "-"),
             "fearGreedLabel": fg.get("classification", ""),
-            "trustLabel": (tr.get("label", "—") or "—").upper(),
+            "trustLabel": (tr.get("label", "-") or "-").upper(),
             "trustMultiplier": tr.get("multiplier", 1),
             "openPositionsCount": sum(1 for v in hb.get("positions", {}).values() if v is not None) if ok else 0,
             "maxPositions": 5,
@@ -140,7 +201,6 @@ class Handler(SimpleHTTPRequestHandler):
             "isReady": rd.get("live_ready", False) if "error" not in rd else False,
             "blockers": rd.get("blockers", []) if "error" not in rd else [],
             "stale": stale,
-            "killSwitchActive": False,
             "pausedAssets": {k: v for k, v in list(paused.items())[:5]},
             "tunnelUrl": self._get_tunnel_url(),
             "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -198,8 +258,7 @@ class Handler(SimpleHTTPRequestHandler):
             "gateAttribution": ga[:8] if ga else [],
         }
 
-    def _build_equity_curve(self) -> dict:
-        """Build equity curve data for the chart."""
+    def _build_equity_curve(self):
         try:
             eq = get_equity_curve()
             if eq.empty:
@@ -219,7 +278,7 @@ class Handler(SimpleHTTPRequestHandler):
         except Exception:
             return {"points": [], "drawdownPoints": []}
 
-    def _send_json(self, data: dict, status: int = 200):
+    def _send_json(self, data, status=200):
         body = json.dumps(data, default=str).encode()
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
@@ -229,15 +288,13 @@ class Handler(SimpleHTTPRequestHandler):
         self.wfile.write(body)
 
     def end_headers(self):
-        # Kill browser caching for all responses (HTML, JS, API)
         self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
         super().end_headers()
 
-    def _get_tunnel_url(self) -> str:
-        """Read current tunnel URL from state file."""
+    def _get_tunnel_url(self):
         try:
-            f = self.directory  # /opt/data/.../hermes-ui/out
-            parent = Path(f).parent.parent  # back to hermes-trading/
+            f = self.directory
+            parent = Path(f).parent.parent
             url_file = parent / "state" / "tunnel_url.txt"
             if url_file.exists():
                 return url_file.read_text().strip()
@@ -246,14 +303,15 @@ class Handler(SimpleHTTPRequestHandler):
         return ""
 
     def log_message(self, format, *args):
-        # Quiet mode
         pass
+
 
 if __name__ == "__main__":
     server = HTTPServer(("0.0.0.0", PORT), Handler)
-    print(f"Hermes API Server → http://0.0.0.0:{PORT}")
+    print(f"Hermes API Server -> http://0.0.0.0:{PORT}")
     print(f"  Frontend: serving {FRONTEND_DIR}")
-    print(f"  API:      /api/dashboard")
+    print(f"  API: endpoints at /api/")
+    print(f"  Interactive: /interactive")
     try:
         server.serve_forever()
     except KeyboardInterrupt:

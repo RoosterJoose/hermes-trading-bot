@@ -44,6 +44,7 @@ from hermes_trading.risk import (
     compute_correlations,
     compute_var,
     var_position_cap,
+    market_correlation_allows_entry,
 )
 from hermes_trading.trust_state import compute_trust_state, status as trust_status
 from hermes_trading.optimizer import trades_ready, check_and_optimize
@@ -159,7 +160,7 @@ class TradingLoop:
         self.trend_1h_candles: Dict[str, list] = {}  # asset_key -> [1h OHLC dicts]
         self.trend_1h_ready: Dict[str, bool] = {a["key"]: False for a in assets}
         self.trend_cooldown: Dict[str, int] = {}  # cycles since last trend entry
-        self.max_concurrent_total = 3  # max 3-4 total across both sleeves
+        self.max_concurrent_total = 5  # max 5 total across both sleeves
         self.trend_universe = {"BTC_USDT", "ETH_USDT", "SOL_USDT", "XRP_USDT", "BNB_USDT", "DOGE_USDT", "AVAX_USDT", "NEAR_USDT"}
 
         # Portfolio-level daily loss hard halt (stops ALL entries)
@@ -1095,6 +1096,15 @@ class TradingLoop:
                                 if not corr_allowed:
                                     safety_skip_reason = f"correlation: {corr_reason}"
 
+                    # P1: Cross-asset correlation deceleration gate
+                    if not safety_skip_reason:
+                        mc_allowed, mc_reason = market_correlation_allows_entry(
+                            self.positions,
+                            self.correlations,
+                        )
+                        if not mc_allowed:
+                            safety_skip_reason = f"market_correlation: {mc_reason}"
+
                     # Hurst regime block: H > 0.55 = strictly disable MR
                     if not safety_skip_reason and hurst.get("block_entry", False):
                         regime_label = hurst.get("regime", "trending").replace("_", " ")
@@ -1523,6 +1533,7 @@ class TradingLoop:
         # ── 2. Volume Score ──
         volume_score = 0.5  # default neutral when data unavailable
         volume_available = False
+        volume_ratio = 0.0  # stored for half-signal volume confluence gate
         if len(candles) >= 2:
             volumes = [c.get("volume", 0) or 0 for c in candles]
             recent_volumes = volumes[-11:] if len(volumes) >= 11 else volumes
@@ -1534,6 +1545,7 @@ class TradingLoop:
                 avg_vol = sum(recent_volumes[:-1]) / max(len(recent_volumes) - 1, 1)
                 if avg_vol > 0:
                     vol_ratio = volumes[-1] / avg_vol
+                    volume_ratio = vol_ratio  # store for half-signal gate
                     # Wider dynamic range: 0.0 at 0.5x avg volume, 1.0 at 2.0x avg.
                     # Previously clamped to ~0.5 range (vol_ratio / 2.0), making
                     # volume a near-constant half-credit with no discriminative power.
@@ -1584,9 +1596,9 @@ class TradingLoop:
             tf = strategy.get("trend_filter", {})
             if tf.get("enabled", True):
                 try:
-                    adx = self._calc_adx(candles, period=tf.get("adx_period", 14))
-                    if adx is not None:
-                        adx_score = max(0.0, 1.0 - adx / 30)
+                    adx_raw = self._calc_adx(candles, period=tf.get("adx_period", 14))
+                    if adx_raw is not None:
+                        adx_score = max(0.0, 1.0 - adx_raw / 30)
                 except Exception:
                     pass
 
@@ -1643,11 +1655,33 @@ class TradingLoop:
         else:
             decision = "none"
 
+        # ── Half-Signal Volume Confluence Gate ──
+        # Downgrade half-signal entries unless they have strict confluence:
+        # volume spike (>=4.0x average) or absence of lower-low cascade
+        downgraded_from_half = False
+        if decision == "half":
+            has_volume_confluence = volume_available and volume_ratio >= 4.0
+            has_no_cascade = lower_low_score == 1.0
+            if not (has_volume_confluence or has_no_cascade):
+                decision = "none"
+                downgraded_from_half = True
+
+        # ── ADX Hard Gate ──
+        # Block all mean-reversion entries when 1-hour ADX > 30
+        # adx_score <= 0.05 corresponds to ADX >= 28.5, practically the 30 threshold
+        adx_blocked = False
+        if adx_score <= 0.05:
+            decision = "none"
+            final_score = max(0.0, final_score - 0.2)
+            adx_blocked = True
+
         return {
             "score": round(final_score, 4),
             "components": components,
             "decision": decision,
             "market_penalty": round(market_penalty, 2),
+            "downgraded_from_half": downgraded_from_half,
+            "adx_blocked": adx_blocked,
         }
 
     # ── Skipped-setup logging ──
@@ -2130,7 +2164,7 @@ class TradingLoop:
         if not ks.get("enabled", True):
             return (True, "")
 
-        max_pos = ks.get("max_open_positions", 3)
+        max_pos = ks.get("max_open_positions", 5)
         open_cnt = sum(1 for p in self.positions.values() if p is not None)
         if open_cnt >= max_pos:
             return (False, f"KILL: {open_cnt} open >= max {max_pos}")
@@ -2935,7 +2969,7 @@ class TradingLoop:
     def _compute_trust_state(self, asset_key: str, strategy: dict) -> float:
         """Unified trust-state: single 0-1 multiplier from all risk signals."""
         ks = strategy.get("kill_switches", {})
-        max_pos = ks.get("max_open_positions", 3)
+        max_pos = ks.get("max_open_positions", 5)
         oc = sum(1 for p in self.positions.values() if p is not None)
 
         trust = compute_trust_state(

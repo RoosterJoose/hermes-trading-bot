@@ -292,3 +292,64 @@ def var_position_cap(
 
     # Clamp
     return max(min_cap, min(cap_pct, max_cap))
+
+
+def market_correlation_allows_entry(
+    positions: dict,
+    corr_matrix: dict,
+    threshold: float = 0.85,
+) -> tuple:
+    """Check if market-wide correlation is safe for new entries.
+
+    When all open positions are highly correlated (>0.85 avg pairwise),
+    a systemic move could hit all stops simultaneously. Block new entries
+    until correlation decouples.
+
+    Args:
+        positions: dict of {asset_key: position_data} from heartbeat
+        corr_matrix: dict of {pair_key: correlation_value}
+        threshold: max average pairwise correlation allowed (default 0.85)
+
+    Returns:
+        (allowed: bool, reason: str)
+    """
+    if not positions or len(positions) < 2:
+        return (True, "insufficient_positions")
+
+    # Get list of open position asset keys
+    open_assets = []
+    for k, v in positions.items():
+        if v is not None:
+            # Extract base symbol
+            sym = k.replace("_USDT", "")
+            open_assets.append(sym)
+
+    if len(open_assets) < 2:
+        return (True, "insufficient_positions")
+
+    # Compute average pairwise correlation among open positions
+    correlations = []
+    for i in range(len(open_assets)):
+        for j in range(i + 1, len(open_assets)):
+            pair = f"{open_assets[i]}_{open_assets[j]}"
+            # Try both orderings
+            corr = corr_matrix.get(pair)
+            if corr is None:
+                pair_rev = f"{open_assets[j]}_{open_assets[i]}"
+                corr = corr_matrix.get(pair_rev)
+            if corr is not None and isinstance(corr, (int, float)):
+                correlations.append(abs(corr))
+
+    if not correlations:
+        return (True, "no_correlation_data")
+
+    avg_corr = sum(correlations) / len(correlations)
+
+    if avg_corr > threshold:
+        return (
+            False,
+            f"market_correlation_block: avg pairwise ρ={avg_corr:.3f} > {threshold}",
+        )
+
+    return (True, f"correlation ok (avg ρ={avg_corr:.3f})")
+
