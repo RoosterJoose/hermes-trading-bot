@@ -209,7 +209,9 @@ function bldPos(d){
     h+='<div><strong style="color:#f1f5f9">'+p.asset+'</strong> <span class="bdg '+(p.direction==='LONG'?'bg-g':'bg-r')+'" style="font-size:7px">'+p.direction+'</span></div>';
     h+='<span style="color:'+(up?'#4ade80':'#f87171')+'">'+fP(p.unrealizedPnlPct||0)+'</span></div>';
     h+='<div style="display:flex;gap:12px;margin-top:4px;font-size:9px;color:#64748b">';
-    h+='<span>$'+(p.size||0).toFixed(0)+'</span><span>@$'+(p.entryPrice||0).toFixed(2)+'</span>';
+    h+='<span title="Entry Price" style="cursor:help">E:$'+(p.entryPrice||0).toFixed(2)+'</span>';
+    h+='<span title="Current Price" style="cursor:help;color:'+((p.currentPrice||0)>(p.entryPrice||0)?'#4ade80':'#f87171')+'">C:$'+(p.currentPrice||0).toFixed(2)+'</span>';
+    h+='<span title="Exit Trigger (chandelier trailing stop)" style="cursor:help;color:#fbbf24">X:$'+(p.exitPrice||'-').toFixed(2)+(p.exitPrice?'&darr;':'')+'</span>';
     h+='<span>Conf:'+(p.confidence||0).toFixed(0)+'%</span></div></div>';
   });
   document.getElementById('pos').innerHTML=h;

@@ -168,6 +168,10 @@ class TradingLoop:
         self.portfolio_loss_halted = False  # Current halt state
         self.portfolio_halt_latched = False  # Hard latch — once set, stays until UTC day reset
 
+        # WR kill switch hard latch (hysteresis: 48% trigger, 50% recovery)
+        self.wr_halt_latched = False  # Once set, stays until WR recovers to >= 50%
+        self.wr_probe_mode = False  # When latched, allows entries at 10% size to prove recovery
+
         # Event-risk calendar kill switch
         self.event_cal_blackout: Optional[Dict] = None  # Blocked state from is_near_macro_event()
         self._init_event_calendar()
@@ -425,6 +429,9 @@ class TradingLoop:
             "btc_1h_rsi": None,
             "btc_4h_rsi": None,
             "btc_price": None,
+            "btc_1h_adx": None,
+            "btc_ema200": None,
+            "btc_price_vs_ema200_pct": None,
             "available": False,
         }
 
@@ -446,6 +453,21 @@ class TradingLoop:
                 else:
                     # Fallback: use RSI on 1h data with longer period as proxy
                     ctx["btc_4h_rsi"] = self._calc_rsi(closes_1h, period=56)
+
+                # 1h ADX(14) for regime filter (uses candles with high/low/close)
+                if len(candles) >= 29:
+                    try:
+                        adx_val = self._calc_adx(candles[-60:], period=14)
+                        ctx["btc_1h_adx"] = round(adx_val, 2) if adx_val else None
+                    except Exception:
+                        ctx["btc_1h_adx"] = None
+
+                # EMA200 on 1h data
+                if len(closes_1h) >= 200:
+                    ema200 = self._calc_ema_value(closes_1h, period=200)
+                    ctx["btc_ema200"] = round(ema200, 2) if ema200 else None
+                    if ema200 and ema200 > 0:
+                        ctx["btc_price_vs_ema200_pct"] = round((closes_1h[-1] - ema200) / ema200 * 100, 2)
 
                 ctx["available"] = True
 
@@ -535,7 +557,12 @@ class TradingLoop:
         return self.last_fear_greed.get("classification", "")
 
     def _btc_gate_allows_entry(self, strategy: dict) -> tuple:
-        """Check if BTC market conditions allow long entries.
+        """Check if BTC market conditions allow long MR entries.
+
+        Three-layer macro filter:
+          1. BTC 1h RSI < 20 (deeply oversold — rare, blocks when panic-selling)
+          2. BTC 1h ADX > 28 AND price below EMA200 (strong downtrend regime)
+          3. BTC price > 5% below EMA200 (structural bearish)
 
         Returns:
             (allowed: bool, reason: str)
@@ -543,11 +570,31 @@ class TradingLoop:
         btc_gate = strategy.get("btc_gate", {})
 
         btc_1h_rsi = self.btc_context.get("btc_1h_rsi")
+        btc_1h_adx = self.btc_context.get("btc_1h_adx")
+        btc_price = self.btc_context.get("btc_price")
+        btc_ema200 = self.btc_context.get("btc_ema200")
 
+        # Layer 1: RSI extreme oversold (existing check)
         if btc_1h_rsi is not None and btc_1h_rsi < btc_gate.get("min_btc_1h_rsi", 20):
             return (
                 False,
                 f"BTC 1h RSI {btc_1h_rsi:.0f} < {btc_gate['min_btc_1h_rsi']} (deeply oversold)",
+            )
+
+        # Layer 2: ADX + EMA200 — strong downtrend, block long MR
+        if btc_1h_adx is not None and btc_ema200 is not None and btc_price is not None:
+            if btc_1h_adx > 28 and btc_price < btc_ema200:
+                return (
+                    False,
+                    f"BTC 1h ADX {btc_1h_adx:.1f} > 28, price ${btc_price:.0f} < EMA200 ${btc_ema200:.0f} (bearish trend)",
+                )
+
+        # Layer 3: Price well below EMA200 even without ADX spike
+        btc_pct = self.btc_context.get("btc_price_vs_ema200_pct")
+        if btc_pct is not None and btc_pct < -5.0:
+            return (
+                False,
+                f"BTC {btc_pct:.1f}% below EMA200 (structural bearish)",
             )
 
         return (True, "")
@@ -1113,15 +1160,31 @@ class TradingLoop:
                         )
 
                     # Rolling win-rate gate (50-trade portfolio WR < 48% = halt)
-                    if (
-                        not safety_skip_reason
-                        and len(self.portfolio_trade_results) >= 30
-                    ):
+                    # Hard latch with hysteresis: once triggered, doesn't clear until WR >= 50%
+                    if not safety_skip_reason and len(self.portfolio_trade_results) >= 30:
                         recent_50 = self.portfolio_trade_results[-50:]
                         if len(recent_50) >= 30:
                             wr = sum(recent_50) / len(recent_50)
+                            # Update latch state
                             if wr < 0.48:
-                                safety_skip_reason = f"wr_halt: portfolio WR {wr:.1%} < 48% ({len(recent_50)} trades)"
+                                self.wr_halt_latched = True
+                            elif wr >= 0.50:
+                                self.wr_halt_latched = False
+                            # Apply gate: hard block first-time only, then probe mode for recovery
+                            if wr < 0.48 and not self.wr_halt_latched:
+                                # First-time trigger: hard block, set latch
+                                self.wr_halt_latched = True
+                                self.wr_probe_mode = True
+                                safety_skip_reason = f"wr_halt: portfolio WR {wr:.1%} < 48% — first trigger ({len(recent_50)} trades)"
+                                print(f"  🛑 WR HALT: portfolio WR {wr:.1%} — entries blocked, latch set")
+                            elif self.wr_halt_latched:
+                                # Latched state: allow entries at probe size (10%)
+                                # Bot must prove its edge back without being permanently bricked
+                                if not self.wr_probe_mode:
+                                    print(f"  ⚠️  WR HALT LATCHED ({wr:.1%}) — operating in PROBE MODE (10% position size)")
+                                self.wr_probe_mode = True
+                            else:
+                                self.wr_probe_mode = False
 
                     # ADX danger zone gate (15m ADX > 35 OR 1h ADX > 30 + price < EMA200)
                     if not safety_skip_reason and self.adx_danger_blocked.get(
@@ -1213,6 +1276,11 @@ class TradingLoop:
                     )
                     if decision == "half":
                         position_size_r *= 0.5
+                    # Probationary probe mode: 10% size during WR recovery
+                    if self.wr_probe_mode:
+                        reduced = position_size_r * 0.10
+                        print(f"  🔬 PROBE MODE: size {position_size_r:.4f} → {reduced:.4f} (10%)")
+                        position_size_r = reduced
 
                     ctx = self._current_market_context()
                     signal_label = (
@@ -1289,7 +1357,9 @@ class TradingLoop:
                     print(f"  {asset_key}: ⏰ TIME EXIT @ {current_price:.4f}")
 
                 else:
-                    # ── 8c. Update chandelier high-water mark ──
+                    # ── 8c. Update chandelier high-water mark & dashboard fields ──
+                    existing["current_price"] = current_price
+                    existing["chandelier_exit"] = existing.get("chandelier_high")
                     if existing.get("tp2_hit", False):
                         existing["runner_high"] = max(
                             existing.get("runner_high", current_price), current_price
@@ -1655,16 +1725,22 @@ class TradingLoop:
         else:
             decision = "none"
 
-        # ── Half-Signal Volume Confluence Gate ──
-        # Downgrade half-signal entries unless they have strict confluence:
-        # volume spike (>=4.0x average) or absence of lower-low cascade
+        # ── Volume Confluence Gate (NB-inspired: hard prerequisite for ALL entries) ──
+        # Full without confluence → downgraded to half (reduced position).
+        # Half without confluence → blocked entirely.
+        # Confluence = volume spike (>=4.0x avg) OR no lower-low cascade.
+        downgraded_from_full = False
         downgraded_from_half = False
-        if decision == "half":
+        if decision in ("full", "half"):
             has_volume_confluence = volume_available and volume_ratio >= 4.0
             has_no_cascade = lower_low_score == 1.0
             if not (has_volume_confluence or has_no_cascade):
-                decision = "none"
-                downgraded_from_half = True
+                if decision == "full":
+                    decision = "half"
+                    downgraded_from_full = True
+                else:  # half
+                    decision = "none"
+                    downgraded_from_half = True
 
         # ── ADX Hard Gate ──
         # Block all mean-reversion entries when 1-hour ADX > 30
@@ -1680,6 +1756,7 @@ class TradingLoop:
             "components": components,
             "decision": decision,
             "market_penalty": round(market_penalty, 2),
+            "downgraded_from_full": downgraded_from_full,
             "downgraded_from_half": downgraded_from_half,
             "adx_blocked": adx_blocked,
         }
@@ -2404,6 +2481,7 @@ class TradingLoop:
         if trend_pos is not None:
             bars_1m = self._read_1m_bars(asset_key)
             candles_1h = self._resample_1h_candles(bars_1m)
+            chandelier = None  # Default — populated below if sufficient data
             if len(candles_1h) >= 15:
                 chandelier = self._calc_trend_chandelier(
                     asset_key, trend_pos, candles_1h
@@ -2428,6 +2506,10 @@ class TradingLoop:
             # Still in trend — log status
             entry = trend_pos["entry_price"]
             pnl_pct = ((current_price - entry) / entry) * 100
+            # Store current price and exit level for dashboard display
+            trend_pos["current_price"] = current_price
+            trend_pos["chandelier_exit"] = chandelier
+            trend_pos["pnl_pct"] = round(pnl_pct, 2)
             print(
                 f"  {asset_key}: 📈 TREND POSITION @ {entry:.2f} | PnL: {pnl_pct:+.2f}%"
             )
@@ -2472,6 +2554,8 @@ class TradingLoop:
         size_r = self._calc_position_size(
             asset_key, candles_1m, strategy, hurst_mode="trend"
         )
+        if self.wr_probe_mode:
+            size_r *= 0.10
         # Open as trend position
         position = {
             "asset": asset_key,
@@ -3085,12 +3169,20 @@ class TradingLoop:
                     pnl = t.get("pnl_pct", 0.0) or 0.0
                 compound *= 1.0 + pnl / 100.0
                 total_replayed += 1
+                # Populate rolling win-rate tracker (survives restarts)
+                is_win = pnl > 0
+                self.portfolio_trade_results.append(is_win)
         self.paper_balance = round(self.initial_balance * compound, 2)
+        # Trim rolling window to last 100 trades (matches live behavior)
+        if len(self.portfolio_trade_results) > 100:
+            self.portfolio_trade_results = self.portfolio_trade_results[-100:]
         if total_replayed > 0:
+            wr = sum(self.portfolio_trade_results) / len(self.portfolio_trade_results) * 100
             print(
                 f"📊 Replayed {total_replayed} historical trades → "
                 f"balance: ${self.initial_balance:.0f} → ${self.paper_balance:.2f} "
-                f"({(self.paper_balance / self.initial_balance - 1) * 100:+.2f}%)"
+                f"({(self.paper_balance / self.initial_balance - 1) * 100:+.2f}%) "
+                f"| WR: {wr:.1f}% ({len(self.portfolio_trade_results)} trade rolling window)"
             )
 
     def _write_heartbeat(self):
@@ -3103,6 +3195,8 @@ class TradingLoop:
                     "entry_price": pos["entry_price"],
                     "entry_time": pos["entry_time"],
                     "signal": pos["signal"],
+                    "current_price": pos.get("current_price"),
+                    "chandelier_exit": pos.get("chandelier_exit"),
                 }
             else:
                 positions_summary[key] = None
@@ -3125,6 +3219,9 @@ class TradingLoop:
                     "entry_time": v["entry_time"],
                     "signal": v["signal"],
                     "strategy": v.get("strategy", "unknown"),
+                    "current_price": v.get("current_price"),
+                    "chandelier_exit": v.get("chandelier_exit"),
+                    "pnl_pct": v.get("pnl_pct"),
                 }
                 for k, v in self.trend_positions.items()
                 if v is not None

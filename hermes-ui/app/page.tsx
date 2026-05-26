@@ -1277,8 +1277,19 @@ export default function HermesDashboard() {
                             <strong className="text-slate-200">{entryPx.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}</strong>
                           </div>
                           <div>
+                            <span className="text-slate-500 text-[10px] uppercase block">Current Price</span>
+                            <strong className={(pos.currentPrice || 0) >= entryPx ? 'text-emerald-400' : 'text-rose-400'}>
+                              {pos.currentPrice ? pos.currentPrice.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2}) : '—'}
+                            </strong>
+                          </div>
+                          <div>
                             <span className="text-slate-500 text-[10px] uppercase block">Size</span>
                             <strong className="text-slate-200">${(pos.size || 0).toLocaleString(undefined, {minimumFractionDigits: 2})}</strong>
+                          </div>
+                          <div>
+                            <span className="text-slate-500 text-[10px] uppercase block">Exit Trigger</span>
+                            <strong className="text-amber-400">{pos.exitPrice ? pos.exitPrice.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2}) : '—'}</strong>
+                            {pos.exitPrice ? <span className="text-[9px] text-slate-600 block">{(pos.exitPrice - entryPx) / entryPx * 100 >= 0 ? '+' : ''}{((pos.exitPrice - entryPx) / entryPx * 100).toFixed(2)}% from entry</span> : null}
                           </div>
                           <div>
                             <span className="text-slate-500 text-[10px] uppercase block">Unrealized PnL</span>
@@ -1288,7 +1299,7 @@ export default function HermesDashboard() {
                           </div>
                           <div>
                             <span className="text-slate-500 text-[10px] uppercase block">Confidence</span>
-                            <strong className="text-emerald-400 bg-emerald-900/15 px-1 rounded-sm">{pos.confidence || '--'}</strong>
+                            <strong className="text-emerald-400 bg-emerald-900/15 px-1 rounded-sm">{pos.confidence || '—'}</strong>
                           </div>
                         </div>
                       </div>
