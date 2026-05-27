@@ -1455,7 +1455,7 @@ class TradingLoop:
                                 price_data,
                                 ctx,
                             )
-                            trail_high_val = existing.get('runner_high', existing.get('chandelier_high'))
+                            trail_high_val = existing.get('runner_high', existing.get('chandelier_high')) or entry_price
                             print(
                                 f"  {asset_key}: 🔚 CHANDELIER EXIT @ {current_price:.4f} (trailed from {trail_high_val:.4f})"
                             )
