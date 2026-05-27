@@ -1,3 +1,5 @@
+#!/opt/hermes/.venv/bin/python3
+import datetime
 #!/usr/bin/env python
 """Launch the trading bot with proper asyncio event loop."""
 import sys
