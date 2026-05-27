@@ -48,10 +48,12 @@ from hermes_trading.risk import (
 )
 from hermes_trading.trust_state import compute_trust_state, status as trust_status
 from hermes_trading.optimizer import trades_ready, check_and_optimize
+from hermes_trading.signal_reconciler import SignalReconciler
 
 from hermes_trading.schema import SchemaError, validate_adapter_output
 
 
+from hermes_trading import signal_handler as sh
 class TradingLoop:
     def __init__(
         self,
@@ -161,7 +163,22 @@ class TradingLoop:
         self.trend_1h_ready: Dict[str, bool] = {a["key"]: False for a in assets}
         self.trend_cooldown: Dict[str, int] = {}  # cycles since last trend entry
         self.max_concurrent_total = 5  # max 5 total across both sleeves
-        self.trend_universe = {"BTC_USDT", "ETH_USDT", "SOL_USDT", "XRP_USDT", "BNB_USDT", "DOGE_USDT", "AVAX_USDT", "NEAR_USDT"}
+        self.trend_universe = {"BTC_USDT", "ETH_USDT", "SOL_USDT", "XRP_USDT", "BNB_USDT", "DOGE_USDT", "AVAX_USDT", "NEAR_USDT", "LTC_USDT"}
+        # Signal-following sleeve (external signals, separate from MR/trend)
+        self.signal_positions: Dict[str, Optional[Dict]] = {}  # asset_key -> position dict
+        self.signal_trade_results: list = []  # closed signal-origin trades
+        self.max_signal_positions = 3  # max concurrent signal trades
+        self.signal_entry_sizes: Dict[str, float] = {}  # asset_key -> base position size_r
+        self._pending_signal_file = self.state_dir / "pending_signal.json"
+        # Signal re-entry cooldown (cycles since last close on same asset)
+        self.signal_entry_cooldown: Dict[str, int] = {}  # asset_key -> remaining blocked cycles
+        self.signal_cooldown_cycles = 30  # ~30 min at 60s/cycle
+
+        # Decoupled signal reconciler (background time-stop safety net)
+        self.signal_reconciler = SignalReconciler(
+            str(self.state_dir),
+            self.signal_positions,
+        )
 
         # Portfolio-level daily loss hard halt (stops ALL entries)
         self.portfolio_hard_halt_pct = 4.0  # -4% portfolio daily → global halt
@@ -308,6 +325,9 @@ class TradingLoop:
             f"   Mode: {self.mode.upper()} | Assets: {', '.join(a['key'] for a in self.assets)}"
         )
         print(f"   Strategy: RSI entry (< threshold) + BTC market gate + FnG filter")
+        # Start the decoupled signal reconciler (background task)
+        reconciler_task = asyncio.create_task(self.signal_reconciler.run())
+
         first_strat = self._load_strategy(self.assets[0]["key"])
         default_cooldown = first_strat.get("cooldown_cycles", 30) if first_strat else 30
         print(f"   Cooldown: {default_cooldown} cycles (configurable per-asset)")
@@ -324,6 +344,9 @@ class TradingLoop:
                 self.btc_context = await self._fetch_btc_context(price)
 
                 # ── Fetch Fear & Greed once per cycle ──
+
+                # ── Check for pending signal from Telegram/API ──
+                self._process_pending_signal()
                 fng_data = await macro.fetch(self.assets[0]["key"])
                 if fng_data.get("available"):
                     self.last_fear_greed = fng_data.get("indicators", {}).get(
@@ -416,11 +439,17 @@ class TradingLoop:
                         key, asset_cfg, strategy, price, onchain, news, macro
                     )
 
+
+                # ── Check ALL signal positions (including assets not in bot's universe) ──
+                await self._manage_all_signal_positions(price)
+
                 self._write_heartbeat()
                 self._write_runtime()
                 await asyncio.sleep(self.cycle_interval)
 
         finally:
+            self.signal_reconciler.stop()
+            reconciler_task.cancel()
             await price._close_exchanges()
 
     async def _fetch_btc_context(self, price_adapter) -> dict:
@@ -782,11 +811,10 @@ class TradingLoop:
         # Check benchmark targets for this asset
         from hermes_trading.optimizer import check_benchmarks
 
+        import json
         trades_file = self.state_dir / asset_key / "trades.jsonl"
         bm_check = {"status": "insufficient_data"}
         if trades_file.exists():
-            import json
-
             tlines = [l for l in trades_file.read_text().strip().split("\n") if l]
             if len(tlines) >= 10:
                 recent = [json.loads(l) for l in tlines[-10:]]
@@ -1095,6 +1123,9 @@ class TradingLoop:
                 safety_skip_reason = (
                     f"zscore_cooldown_{self.zscore_cooldown[asset_key]}"
                 )
+                # Signal re-entry cooldown (decrement each cycle)
+                if self.signal_entry_cooldown.get(asset_key, 0) > 0:
+                    self.signal_entry_cooldown[asset_key] -= 1
             else:
                 zs_blocked, zs_reason = self._check_zscore_flash(candles, asset_key)
                 if zs_blocked:
@@ -1424,8 +1455,9 @@ class TradingLoop:
                                 price_data,
                                 ctx,
                             )
+                            trail_high_val = existing.get('runner_high', existing.get('chandelier_high'))
                             print(
-                                f"  {asset_key}: 🔚 CHANDELIER EXIT @ {current_price:.4f} (trailed from {existing.get('runner_high', existing['chandelier_high']):.4f})"
+                                f"  {asset_key}: 🔚 CHANDELIER EXIT @ {current_price:.4f} (trailed from {trail_high_val:.4f})"
                             )
 
                     # ── 8f. TP2 — take another slice at target R ──
@@ -3184,6 +3216,405 @@ class TradingLoop:
                 f"({(self.paper_balance / self.initial_balance - 1) * 100:+.2f}%) "
                 f"| WR: {wr:.1f}% ({len(self.portfolio_trade_results)} trade rolling window)"
             )
+
+
+    # ── Signal-Following Sleeve ─────────────────────────────────────────
+
+
+    def _process_pending_signal(self):
+        """Check for pending signal file and process it."""
+        pending_file = getattr(self, '_pending_signal_file', None)
+        if pending_file is None:
+            pending_file = self.state_dir / "pending_signal.json"
+            self._pending_signal_file = pending_file
+
+        if not pending_file.exists():
+            return
+
+        try:
+            import json as _json
+            data = _json.loads(pending_file.read_text())
+            signal = data.get("signal")
+            if not signal:
+                pending_file.unlink(missing_ok=True)
+                return
+
+            result = self.add_signal_entry(signal, {})
+            print(f"📡 Pending signal processed: {result}")
+
+            # Write result back for the caller to read
+            try:
+                result_file = self.state_dir / "signal_result.json"
+                hm_state.atomic_write_json(result_file, result)
+            except Exception:
+                pass
+
+            pending_file.unlink(missing_ok=True)
+
+        except Exception as e:
+            print(f"  ⚠ Pending signal error: {e}")
+            try:
+                pending_file.unlink(missing_ok=True)
+            except Exception:
+                pass
+
+
+    async def _manage_all_signal_positions(self, price_adapter):
+        """Check ALL signal positions regardless of asset universe.
+        
+        Fetches price data for any signal assets not in the bot's configured
+        asset list so they can still be managed (TP/SL checks).
+        """
+        for asset_key, pos in list(self.signal_positions.items()):
+            if pos is None:
+                continue
+
+            # Fetch price data (covers both in-universe and out-of-universe signal assets)
+            # Note: signal positions for in-universe assets are NOT handled by
+            # _manage_signal_positions — that only runs for MR/trend positions.
+            try:
+                price_data = await price_adapter.fetch(asset_key)
+                current_price = price_data.get("current_price", 0.0)
+                if current_price <= 0:
+                    continue
+            except Exception as e:
+                print(f"  ⚠ Signal {asset_key}: price fetch failed: {e}")
+                continue
+
+            # Check exits
+            exit_info = sh.check_signal_exits(pos, current_price)
+            action = exit_info["action"]
+
+            if action == "none":
+                pos["current_price"] = current_price
+                continue
+
+            pnl_pct = exit_info["pnl_pct"]
+            reason = exit_info["reason"]
+            partial = exit_info["partial"]
+            slice_pct = exit_info["slice_pct"]
+
+            if action.startswith("tp"):
+                target_num = int(action[2])
+                pos[f"tp{target_num}_hit"] = True
+                pos["targets_hit"] = target_num
+
+                if partial:
+                    self._close_signal_slice(
+                        asset_key, current_price, pnl_pct, reason,
+                        price_data, slice_pct,
+                    )
+                    print(f"  {asset_key}: 📡 TP{target_num} HIT (signal, slice={slice_pct:.0%})")
+                    # TP1: move remaining SL to breakeven
+                    if target_num == 1 and not pos.get("breakeven_set", False):
+                        pos["stop_loss"] = pos["entry_price"]
+                        pos["breakeven_set"] = True
+                        print(f"  {asset_key}: 🔒 SL moved to breakeven (entry={pos['entry_price']:.4f})")
+                else:
+                    self._close_signal_position(
+                        asset_key, current_price, pnl_pct, reason, price_data,
+                    )
+                    print(f"  {asset_key}: 📡 TP{target_num} — FULL EXIT (signal)")
+
+            elif action == "stop_loss":
+                self._close_signal_position(
+                    asset_key, current_price, pnl_pct, reason, price_data,
+                )
+                print(f"  {asset_key}: 📡 STOP LOSS (signal, pnl={pnl_pct:+.2f}%)")
+
+            elif action == "time_stop":
+                self._close_signal_position(
+                    asset_key, current_price, pnl_pct, reason, price_data,
+                )
+                print(f"  {asset_key}: ⏱ TIME STOP (signal, pnl={pnl_pct:+.2f}%, {sh.TIME_STOP_MINUTES}min expired)")
+
+    def _manage_signal_positions(
+        self,
+        asset_key: str,
+        current_price: float,
+        strategy: dict,
+        price_data: dict,
+    ):
+        """Manage signal-origin positions — check for target hits / stop loss."""
+        pos = self.signal_positions.get(asset_key)
+        if pos is None:
+            return
+
+        # Check exits
+        exit_info = sh.check_signal_exits(pos, current_price)
+        action = exit_info["action"]
+
+        if action == "none":
+            # Just update current price
+            pos["current_price"] = current_price
+            return
+
+        pnl_pct = exit_info["pnl_pct"]
+        reason = exit_info["reason"]
+        partial = exit_info["partial"]
+        slice_pct = exit_info["slice_pct"]
+
+        if action.startswith("tp"):
+            target_num = int(action[2])
+            # Mark target as hit
+            pos[f"tp{target_num}_hit"] = True
+            pos["targets_hit"] = target_num
+
+            if partial:
+                slice_pct = exit_info["slice_pct"]
+                self._close_signal_slice(
+                    asset_key, current_price, pnl_pct, reason,
+                    price_data, slice_pct,
+                )
+                print(f"  {asset_key}: 📡 TP{target_num} HIT @ {current_price:.4f} (signal, slice={slice_pct:.0%})")
+                # TP1: move remaining SL to breakeven
+                if target_num == 1 and not pos.get("breakeven_set", False):
+                    pos["stop_loss"] = pos["entry_price"]
+                    pos["breakeven_set"] = True
+                    print(f"  {asset_key}: 🔒 SL moved to breakeven (entry={pos['entry_price']:.4f})")
+            else:
+                self._close_signal_position(
+                    asset_key, current_price, pnl_pct, reason, price_data,
+                )
+                print(f"  {asset_key}: 📡 TP{target_num} HIT — FULL EXIT @ {current_price:.4f} (signal)")
+
+        elif action == "stop_loss":
+            self._close_signal_position(
+                asset_key, current_price, pnl_pct, reason, price_data,
+            )
+            print(f"  {asset_key}: 📡 STOP LOSS @ {current_price:.4f} (signal, pnl={pnl_pct:+.2f}%)")
+
+        elif action == "time_stop":
+            self._close_signal_position(
+                asset_key, current_price, pnl_pct, reason, price_data,
+            )
+            print(f"  {asset_key}: ⏱ TIME STOP @ {current_price:.4f} (signal, pnl={pnl_pct:+.2f}%, {TIME_STOP_MINUTES}min expired)")
+
+    def _close_signal_slice(
+        self,
+        asset_key: str,
+        price: float,
+        pnl_pct: float,
+        reason: str,
+        price_data: dict,
+        slice_pct: float = 0.20,
+    ):
+        """Close a slice of a signal position (target scale-out)."""
+        pos = self.signal_positions.get(asset_key)
+        if not pos:
+            return
+
+        # Keep the trade result for tracking
+        slice_record = {
+            "asset": asset_key,
+            "entry_price": pos["entry_price"],
+            "exit_price": price,
+            "pnl_pct": round(pnl_pct, 2),
+            "exit_reason": reason,
+            "slice_pct": slice_pct,
+            "entry_time": pos["entry_time"],
+            "exit_time": datetime.now(timezone.utc).isoformat(),
+            "direction": pos["direction"],
+            "source": "signal",
+        }
+        self.signal_trade_results.append(slice_record)
+
+        # Log slice to performance ledger
+        try:
+            sh.log_signal_exit(
+                self.state_dir, asset_key, price, pnl_pct, reason,
+                slice_pct=slice_pct, entry_price=pos["entry_price"],
+                entry_time=pos.get("entry_time"),
+                direction=pos.get("direction", "long"),
+            )
+        except Exception:
+            pass
+
+
+    def _close_signal_position(
+        self,
+        asset_key: str,
+        price: float,
+        pnl_pct: float,
+        reason: str,
+        price_data: dict,
+    ):
+        """Close an entire signal position."""
+        pos = self.signal_positions.get(asset_key)
+        if not pos:
+            return
+
+        # Full close record
+        targets_hit = pos.get("targets_hit", 0) or 0
+        # Calculate remaining % using the half-life model
+        remaining = 1.0
+        for t in range(1, targets_hit + 1):
+            remaining -= sh._tp_slice(t)
+        trade_record = {
+            "asset": asset_key,
+            "entry_price": pos["entry_price"],
+            "exit_price": price,
+            "pnl_pct": round(pnl_pct, 2),
+            "exit_reason": reason,
+            "slice_pct": max(remaining, 0.0),
+            "entry_time": pos["entry_time"],
+            "exit_time": datetime.now(timezone.utc).isoformat(),
+            "direction": pos["direction"],
+            "source": "signal",
+        }
+
+        # Aggregate all slices for total PnL calculation
+        # Sum up existing slices plus this final close
+        existing_slices = [t for t in self.signal_trade_results
+                          if t["asset"] == asset_key]
+        entry = pos["entry_price"]
+        total_closed_pct = sum(s.get("slice_pct", 0) for s in existing_slices)
+        total_pnl = trade_record["slice_pct"] * pnl_pct
+        for s in existing_slices:
+            total_pnl += s["slice_pct"] * s["pnl_pct"]
+
+        self.signal_trade_results.append(trade_record)
+
+        # Log final close to performance ledger
+        try:
+            market_ctx = self._current_market_context()
+            sh.log_signal_exit(
+                self.state_dir, asset_key, price, pnl_pct, reason,
+                slice_pct=trade_record["slice_pct"],
+                entry_price=pos["entry_price"],
+                entry_time=pos.get("entry_time"),
+                direction=pos.get("direction", "long"),
+                targets_hit=pos.get("targets_hit"),
+                market_ctx=market_ctx,
+            )
+        except Exception:
+            pass
+
+        self.signal_positions[asset_key] = None
+        # Set signal re-entry cooldown
+        self.signal_entry_cooldown[asset_key] = self.signal_cooldown_cycles
+
+        print(
+            f"📡 {asset_key}: SIGNAL CLOSED at {price:.6f} | "
+            f"reason={reason} | slice_pnl={pnl_pct:+.2f}% | "
+            f"total_pnl_weighted={total_pnl:.2f}%"
+        )
+
+        # Also update paper balance (same fee model as main positions)
+        TAKER_FEE_RATE = 0.00025
+        # Use the signal's base entry size
+        base_size = self.signal_entry_sizes.get(asset_key, 0.5)
+        pos_value = trade_record["slice_pct"] * base_size * self.paper_balance
+        entry_fee = pos_value * TAKER_FEE_RATE
+        exit_fee = pos_value * (1 + pnl_pct / 100) * TAKER_FEE_RATE
+        gross_pnl_dollars = pnl_pct / 100 * pos_value
+        net_pnl_dollars = gross_pnl_dollars - entry_fee - exit_fee
+        self.paper_balance += net_pnl_dollars
+
+    def add_signal_entry(self, signal: dict, price_data: dict) -> dict:
+        """Add a signal-origin trade to the bot.
+
+        Parses signal, validates against market, creates position.
+        Returns dict with result status.
+        """
+        asset_raw = signal["asset"]
+        # Ensure USDT suffix
+        if not asset_raw.upper().endswith("USDT"):
+            asset_key = asset_raw.upper() + "_USDT"
+        else:
+            asset_key = asset_raw.upper().replace("USDT", "_USDT")
+
+        direction = signal["direction"]
+        entry_price = signal["entry"]
+
+        # Check if we already have a signal position for this asset (in-memory)
+        if self.signal_positions.get(asset_key) is not None:
+            return {"status": "error", "reason": f"already have signal position for {asset_key}"}
+
+        # Ledger check: reject if an OPEN entry exists for same asset (survives restarts)
+        existing_opens = [
+            e for e in sh.read_signal_ledger(str(self.state_dir))
+            if e.get("exit_reason") is None and e.get("status") != "CLOSED"
+            and (e.get("asset") == asset_key or e.get("symbol") == asset_key)
+        ]
+        if existing_opens:
+            return {"status": "error", "reason": f"ledger shows existing open position for {asset_key}"}
+
+        # Cooldown check: prevent re-entry too soon after a close
+        remaining_cooldown = self.signal_entry_cooldown.get(asset_key, 0)
+        if remaining_cooldown > 0:
+            return {"status": "error", "reason": f"signal cooldown for {asset_key}: {remaining_cooldown} cycles remaining"}
+
+        # Count total signal positions
+        open_signals = sum(1 for p in self.signal_positions.values() if p is not None)
+        if open_signals >= self.max_signal_positions:
+            return {"status": "error", "reason": f"max {self.max_signal_positions} signal positions reached"}
+
+        # Cross-sleeve check: don't enter if MR or trend has this asset
+        if self.positions.get(asset_key) is not None:
+            return {"status": "error", "reason": f"MR position already open for {asset_key}"}
+        if self.trend_positions.get(asset_key) is not None:
+            return {"status": "error", "reason": f"trend position already open for {asset_key}"}
+
+        # Cap SL to 2% max (NotebookLM: 5% SL with 0.67% TP is lethal)
+        sh.cap_signal_sl(signal)
+        if signal.get("_sl_capped"):
+            print(f"  ⚠️ {asset_key}: SL capped from {signal['_sl_original']:.4f} to {signal['stop_loss']:.4f} (max 2%)")
+
+        # BTC regime gate: block long signals in strong bear trend (same as MR)
+        if direction == "long":
+            btc_1h_adx = self.btc_context.get("btc_1h_adx")
+            btc_price = self.btc_context.get("btc_price")
+            btc_ema200 = self.btc_context.get("btc_ema200")
+            if (btc_1h_adx is not None and btc_ema200 is not None
+                    and btc_price is not None
+                    and btc_1h_adx > 28 and btc_price < btc_ema200):
+                return {
+                    "status": "error",
+                    "reason": (
+                        f"BTC regime blocks LONG signal: ADX {btc_1h_adx:.1f} > 28, "
+                        f"price ${btc_price:.0f} < EMA200 ${btc_ema200:.0f}"
+                    ),
+                }
+
+        # WR probe mode: 10% sizing
+        base_size_r = 0.5  # default signal position size (50% of R_base)
+        if self.wr_probe_mode:
+            base_size_r *= 0.10
+            print(f"  🔬 PROBE MODE: signal size {base_size_r*10:.1f}% of standard")
+
+        # Create the position
+        pos = sh.make_signal_position(signal, base_size_r, asset_key)
+        self.signal_positions[asset_key] = pos
+        self.signal_entry_sizes[asset_key] = base_size_r
+
+        # Log to signal performance ledger
+        try:
+            market_ctx = self._current_market_context()
+            sh.log_signal_entry(
+                self.state_dir, signal, asset_key, base_size_r, market_ctx
+            )
+        except Exception:
+            pass
+
+
+        print(
+            f"📡 {asset_key}: SIGNAL ENTRY at {entry_price:.6f} | "
+            f"direction={direction} | "
+            f"SL={signal['stop_loss']:.4f} | "
+            f"TPs={len(signal['targets'])} targets | "
+            f"size_r={base_size_r}"
+        )
+
+        return {
+            "status": "ok",
+            "asset": asset_key,
+            "entry_price": entry_price,
+            "direction": direction,
+            "targets": signal["targets"],
+            "stop_loss": signal["stop_loss"],
+            "size_r": base_size_r,
+        }
 
     def _write_heartbeat(self):
         """Write heartbeat JSON to state."""
