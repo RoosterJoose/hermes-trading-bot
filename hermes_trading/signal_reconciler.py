@@ -136,6 +136,46 @@ def force_close_entry(
     return exit_record
 
 
+def already_reconciled(state_dir: str, entry: dict) -> bool:
+    """Check if this entry already has a reconciler close record written."""
+    asset_key = entry.get("asset", entry.get("symbol", ""))
+    if not asset_key:
+        return False
+
+    entry_time = entry.get("entry_time") or entry.get("timestamp", "")
+    ledger_path = os.path.join(state_dir, "signal_ledger.jsonl")
+    if not os.path.exists(ledger_path):
+        return False
+
+    try:
+        with open(ledger_path) as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    rec = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if rec.get("exit_reason") != "time_stop_reconciler":
+                    continue
+                rec_asset = rec.get("asset", rec.get("symbol", ""))
+                if rec_asset != asset_key:
+                    continue
+                # Found a reconciler close for this asset
+                rec_entry_time = rec.get("entry_time", "")
+                if rec_entry_time and rec_entry_time == entry_time:
+                    return True
+                # Also check if reconciler close is after the original entry
+                rec_exit = rec.get("exit_time", "")
+                if rec_exit and entry_time and rec_exit > entry_time:
+                    return True
+    except OSError:
+        pass
+
+    return False
+
+
 def reconcile(state_dir: str, in_memory_positions: dict | None = None) -> list[dict]:
     """Run one reconciliation pass.
 
@@ -155,6 +195,18 @@ def reconcile(state_dir: str, in_memory_positions: dict | None = None) -> list[d
 
     for entry in open_entries:
         if not is_time_stop_expired(entry):
+            continue
+
+        # Guard: skip if we already reconciled this entry
+        if already_reconciled(state_dir, entry):
+            logger.debug(
+                "Skipping %s — already reconciled",
+                entry.get("asset", entry.get("symbol", "?")),
+            )
+            if in_memory_positions is not None:
+                asset_key = entry.get("asset", entry.get("symbol", ""))
+                if asset_key in in_memory_positions:
+                    in_memory_positions[asset_key] = None
             continue
 
         current_price = entry.get("exit_price") or entry.get("current_price", 0)
